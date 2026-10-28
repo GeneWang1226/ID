@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { getDb } from "@/lib/db";
 
 export async function POST(request: Request) {
   try {
@@ -7,9 +7,10 @@ export async function POST(request: Request) {
     if (!identity || !category || !key || !value) {
       return NextResponse.json({ error: "missing fields" }, { status: 400 });
     }
+    const db = getDb(identity);
     await db.execute({
-      sql: "INSERT INTO items (identity, category, key, value, note) VALUES (?, ?, ?, ?, ?)",
-      args: [identity, category, key, value, note ?? ""],
+      sql: "INSERT INTO items (category, key, value, note) VALUES (?, ?, ?, ?)",
+      args: [category, key, value, note ?? ""],
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

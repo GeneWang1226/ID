@@ -23,7 +23,7 @@
 | `profile.md` | 该身份的档案：基本信息、喜好、习惯、备忘 |
 | `AGENTS.md` | 给 AI 的身份级指引 |
 | `passwords/template.kdbx` | 旧的空白密码库壳。新建身份不再复制它，而是按 `config` 里的密码当场生成 |
-| `data/schema.sql` | Turso 个人信息表结构（非机密数据，所有身份共用一个库） |
+| `data/schema.sql` | Turso 个人信息表结构（非机密数据，每个身份一个库） |
 | `documents/` | 证件扫描件、重要文件 |
 | `keys/` | SSH / GPG 密钥 |
 | `notes/` | 文本笔记 |

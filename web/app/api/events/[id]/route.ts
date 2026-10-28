@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { getDb } from "@/lib/db";
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const { identity } = await request.json();
+    if (!identity) {
+      return NextResponse.json({ error: "missing identity" }, { status: 400 });
+    }
+    const db = getDb(identity);
     await db.execute({ sql: "DELETE FROM events WHERE id = ?", args: [id] });
     return NextResponse.json({ ok: true });
   } catch (e) {
