@@ -1,0 +1,27 @@
+// Syncthing 文件夹设为 ~/ID。本文件放在同步根目录才会生效。
+// Syncthing 不会把 .stignore 本身同步到其他设备。
+//
+// 同步：identities/、config
+// 不同步：脚本、模板、文档、.git（这些留给 git）
+
+// git 仓库本体。同步它会在多端把仓库写坏。
+(?d).git
+
+// git 管理的脚本、模板、文档和安装包
+/scripts
+/template
+/assets
+/AGENTS.md
+/README.md
+/MAINTENANCE.md
+/.gitignore
+
+// 本机操作日志，两端同时写会冲突
+/logs
+
+// Turso 令牌按机器单独持有，不跟着身份目录走
+.turso.env
+
+// 系统垃圾。(?d) 允许在它们挡住删目录时被清掉。
+(?d).DS_Store
+(?d)Thumbs.db

@@ -1,0 +1,20 @@
+# ===== 机密内容：永不入库，也不准 git add -f 强行加入 =====
+
+# 密码库（含模板的空白库；重新生成方法见 MAINTENANCE.md）
+*.kdbx
+
+# Turso 连接信息（含 token）。也在 .stignore 里，不进 Syncthing。
+.turso.env
+
+# 身份数据归 Syncthing（见 .stignore），整棵目录不进 git
+identities/
+
+# 新建密码库的初始主密码
+config
+
+# 脚本操作日志
+logs/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
