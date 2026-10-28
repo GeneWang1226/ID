@@ -102,4 +102,4 @@ source identities/<身份名>/.turso.env  # 程序里用 TURSO_URL / TURSO_AUTH_
 | --- | --- |
 | 忘记某身份 kdbx 主密码 | 无法找回，从备份恢复；恢复码在 `recovery/` |
 | turso 命令找不到 | 重新跑安装脚本，或检查 `~/.turso` 是否在 PATH |
-| 想删掉某身份 | 手动 `rm -rf identities/<身份名>`；Turso 里对应的数据用 `DELETE FROM items WHERE identity='<身份名>'` 和 `DELETE FROM events WHERE identity='<身份名>'` 清理 |
+| 想删掉某身份 | 手动 `rm -rf identities/<身份名>`；有 Turso 库的话同时 `turso db destroy id-<身份名>` |
