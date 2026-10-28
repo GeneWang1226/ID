@@ -99,7 +99,7 @@ docker compose exec web sqlite3 /app/data/id.db
 ## 同步与备份（待接入）
 
 - [ ] **Syncthing**：添加文件夹时选 `~/ID`，不要只选 `identities/`，否则根目录的 `.stignore` 不生效。同步出去的是 `identities/` 和 `config`；脚本、模板、文档、`.git` 被忽略。`.stignore` 本身不会被同步，新设备要从 git 拿一份，或手动复制。`config` 到另一台机器后确认权限仍是 `600`。kdbx 可以同步，但**避免两端同时改同一个库**。`.turso.env` 含 token，已在 `.stignore` 里排除，每台机器自己开通。**开启交错版本控制（staggered versioning）**。身份文件的历史靠它，不靠 git。
-- [ ] **备份**：定期 `tar` 打包 + `gpg -c` 加密后存外部存储；Turso 侧用 `turso db shell id-<身份名> .dump > backup.sql` 导出。
+- [ ] **备份**：定期 `tar` 打包 + `gpg -c` 加密后存外部存储；SQLite 库直接复制 `./data/id.db` 或用 `sqlite3 ./data/id.db .dump > backup.sql` 导出。
 
 ## 故障排查
 
@@ -107,4 +107,4 @@ docker compose exec web sqlite3 /app/data/id.db
 | --- | --- |
 | 忘记某身份 kdbx 主密码 | 无法找回，从备份恢复；恢复码在 `recovery/` |
 | turso 命令找不到 | 重新跑安装脚本，或检查 `~/.turso` 是否在 PATH |
-| 想删掉某身份 | 手动 `rm -rf identities/<身份名>`；有 Turso 库的话同时 `turso db destroy id-<身份名>` |
+| 想删掉某身份 | 手动 `rm -rf identities/<身份名>`；SQLite 里对应的数据用 `DELETE FROM items WHERE identity='<身份名>'` 和 `DELETE FROM events WHERE identity='<身份名>'` 清理 |
