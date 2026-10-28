@@ -33,6 +33,27 @@ if ! command -v turso >/dev/null 2>&1; then
     exit 1
 fi
 
+# turso 未登录时仍会退出码 0，并把错误写到标准输出。不能只靠 set -e。
+require_turso_login() {
+    local out
+    out="$(turso auth whoami 2>&1 || true)"
+    if [[ "$out" == *"not logged in"* ]]; then
+        echo "错误: 尚未登录 Turso。请先在这台机器执行: turso auth login" >&2
+        exit 1
+    fi
+}
+
+reject_if_unusable() {
+    local label="$1"
+    local value="$2"
+    if [[ -z "$value" || "$value" == *"not logged in"* || "$value" == *$'\n'* ]]; then
+        echo "错误: 没有拿到${label}，未写入 .turso.env" >&2
+        exit 1
+    fi
+}
+
+require_turso_login
+
 echo "==> 创建 Turso 数据库: $DB_NAME"
 turso db create "$DB_NAME"
 
@@ -41,6 +62,8 @@ turso db shell "$DB_NAME" < "$SCHEMA"
 
 DB_URL="$(turso db show "$DB_NAME" --url)"
 DB_TOKEN="$(turso db tokens create "$DB_NAME")"
+reject_if_unusable "数据库地址" "$DB_URL"
+reject_if_unusable "访问令牌" "$DB_TOKEN"
 
 ENV_FILE="$IDENTITY_DIR/.turso.env"
 cat > "$ENV_FILE" <<EOF
