@@ -10,6 +10,10 @@
 | --- | --- |
 | `make new name=gene` | 新增身份 |
 | `make passwd name=gene` | 修改某身份 kdbx 主密码 |
+| `make pass name=gene title="..."` | 复制密码到剪贴板（10 秒后自动清空） |
+| `make pass-show name=gene title="..."` | 显示整条记录（无桌面/剪贴板时用） |
+| `make pass-add name=gene title="..." user="..."` | 新增条目并自动生成强密码 |
+| `make pass-add-manual name=gene title="..."` | 新增条目，手动输入密码 |
 | `make web` / `make web-stop` / `make web-logs` | 启停 Web 界面、看日志 |
 | `make db` | 打开 SQLite 交互查询 |
 | `make item identity=gene cat=account key=proton-email value="gene@proton.me"` | 写/改条目 |
@@ -35,8 +39,7 @@ make new name=gene
 
 三步，密码和信息分开存：
 
-1. **密码 → kdbx（自己操作）**：注册时用 KeePassXC 生成密码，然后
-   `keepassxc-cli add identities/gene/passwords/gene.kdbx "Proton 邮箱"`
+1. **密码 → kdbx（自己操作）**：`make pass-add name=gene title="Proton 邮箱" user="gene@proton.me"` 会自动生成 20 位强密码，把它填到注册页面；已有密码用 `make pass-add-manual`
 2. **账号信息 → SQLite（可让 AI 代劳）**：
    `make item identity=gene cat=account key=proton-email value="gene@proton.me" note="主用邮箱"`
 3. **记一笔事件**：

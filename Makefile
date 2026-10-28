@@ -17,6 +17,22 @@ passwd: ## 修改某身份 kdbx 主密码（name=gene）
 	@test -n "$(NAME)" || { echo "用法: make passwd name=<身份名>"; exit 1; }
 	keepassxc-cli db-edit --set-password identities/$(NAME)/passwords/$(NAME).kdbx
 
+pass: ## 复制密码到剪贴板，10 秒后自动清空（name=gene title="Proton 邮箱"）
+	@test -n "$(NAME)" -a -n "$(TITLE)" || { echo '用法: make pass name=gene title="Proton 邮箱"'; exit 1; }
+	keepassxc-cli clip identities/$(NAME)/passwords/$(NAME).kdbx "$(TITLE)"
+
+pass-show: ## 显示整条记录（name=gene title="..."）
+	@test -n "$(NAME)" -a -n "$(TITLE)" || { echo '用法: make pass-show name=gene title="Proton 邮箱"'; exit 1; }
+	keepassxc-cli show identities/$(NAME)/passwords/$(NAME).kdbx "$(TITLE)"
+
+pass-add: ## 新增条目并自动生成强密码（name=gene title="..." user="..."）
+	@test -n "$(NAME)" -a -n "$(TITLE)" || { echo '用法: make pass-add name=gene title="Proton 邮箱" user="gene@proton.me"'; exit 1; }
+	keepassxc-cli add -g -L 20 -l -U -n -s --every-group --exclude-similar -u "$(USER)" identities/$(NAME)/passwords/$(NAME).kdbx "$(TITLE)"
+
+pass-add-manual: ## 新增条目，手动输入密码（name=gene title="..." user="..."）
+	@test -n "$(NAME)" -a -n "$(TITLE)" || { echo '用法: make pass-add-manual name=gene title="Proton 邮箱" user="gene@proton.me"'; exit 1; }
+	keepassxc-cli add -p -u "$(USER)" identities/$(NAME)/passwords/$(NAME).kdbx "$(TITLE)"
+
 web: ## 构建并启动 Web 界面（http://localhost:3000）
 	docker compose up -d --build
 
