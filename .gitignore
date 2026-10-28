@@ -1,6 +1,6 @@
 # ===== 机密内容：永不入库，也不准 git add -f 强行加入 =====
 
-# 密码库（含模板的空白库；重新生成方法见 MAINTENANCE.md）
+# 密码库（含模板的空白库；重新生成方法见 docs/MAINTENANCE.md）
 *.kdbx
 
 # Turso 连接信息（含 token）。也在 .stignore 里，不进 Syncthing。
@@ -14,6 +14,10 @@ config
 
 # 脚本操作日志
 logs/
+
+# SQLite 库和它的本地备份（库里是非机密个人信息，但副本不入 git）
+data/*.db
+backups/
 
 # 系统垃圾
 .DS_Store

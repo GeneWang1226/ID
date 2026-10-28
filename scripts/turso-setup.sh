@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 为某个身份创建 Turso 数据库，并导入 data/schema.sql
 # 用法: turso-setup.sh <身份名>
-# 前置条件: 已安装 turso CLI 且已 turso auth login（见 ~/ID/MAINTENANCE.md）
+# 前置条件: 已安装 turso CLI 且已 turso auth login（见 ~/ID/docs/MAINTENANCE.md）
+# 注意: 项目已改用本地 SQLite（data/id.db），此脚本仅保留备用
 
 set -euo pipefail
 
@@ -29,7 +30,7 @@ DB_NAME="id-$NAME"
 [[ -f "$SCHEMA" ]] || { echo "错误: 找不到表结构文件: $SCHEMA" >&2; exit 1; }
 
 if ! command -v turso >/dev/null 2>&1; then
-    echo "错误: 未安装 turso CLI。安装方法见 ~/ID/MAINTENANCE.md" >&2
+    echo "错误: 未安装 turso CLI。安装方法见 ~/ID/docs/MAINTENANCE.md" >&2
     exit 1
 fi
 

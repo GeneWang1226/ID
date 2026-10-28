@@ -11,13 +11,19 @@
 /scripts
 /template
 /assets
+/docs
+/web
+/Makefile
+/docker-compose.yml
 /AGENTS.md
 /README.md
-/MAINTENANCE.md
 /.gitignore
 
 // 本机操作日志，两端同时写会冲突
 /logs
+
+// 本地备份副本，库里数据本体已同步，副本不跟
+/backups
 
 // Turso 令牌按机器单独持有，不跟着身份目录走
 .turso.env
