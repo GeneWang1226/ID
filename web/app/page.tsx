@@ -17,16 +17,9 @@ export default async function Home({
 
   if (identity && identities.includes(identity)) {
     try {
-      const db = getDb(identity);
-      const itemsRes = await db.execute(
-        "SELECT id, category, key, value, note, updated_at FROM items ORDER BY category, key"
-      );
-      items = itemsRes.rows as unknown as typeof items;
-
-      const eventsRes = await db.execute(
-        "SELECT id, happened_at, title, detail FROM events ORDER BY happened_at DESC"
-      );
-      events = eventsRes.rows as unknown as typeof events;
+      const db = getDb();
+      items = db.prepare("SELECT id, category, key, value, note, updated_at FROM items WHERE identity = ? ORDER BY category, key").all(identity) as typeof items;
+      events = db.prepare("SELECT id, happened_at, title, detail FROM events WHERE identity = ? ORDER BY happened_at DESC").all(identity) as typeof events;
     } catch (e) {
       console.error(`Failed to load ${identity}:`, e);
     }
@@ -44,7 +37,7 @@ export default async function Home({
       >
         <h1 style={{ fontSize: "1rem", marginTop: 0 }}>身份</h1>
         {identities.length === 0 && (
-          <p style={{ color: "#64748b", fontSize: "0.875rem" }}>暂无已开通 Turso 的身份</p>
+          <p style={{ color: "#64748b", fontSize: "0.875rem" }}>暂无身份数据</p>
         )}
         <nav style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
           {identities.map((name) => (
@@ -70,8 +63,8 @@ export default async function Home({
         ) : (
           <p style={{ color: "#64748b" }}>
             {identities.length === 0
-              ? "请先运行 ~/ID/scripts/turso-setup.sh <身份名> 开通数据库"
-              : "身份不存在或未开通"}
+              ? "请先添加身份和数据"
+              : "身份不存在"}
           </p>
         )}
       </main>

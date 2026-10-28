@@ -66,19 +66,24 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 
 直接编辑 `~/ID/template/` 下的目录和文件。**改动只影响之后新建的身份**，已有身份保持原样。
 
-### 为身份开通 Turso 数据库
+### SQLite 数据库（非机密个人信息）
 
-每个身份一个库 `id-<身份名>`：
+所有身份共用一个 SQLite 库 `./data/id.db`，用 `identity` 列区分。首次启动 Web 界面时自动从 `template/data/schema.sql` 初始化。
+
+**启动 Web 界面：**
 
 ```bash
-~/ID/scripts/turso-setup.sh <身份名>
+docker compose up -d
 ```
 
-完成后连接信息写在 `identities/<身份名>/.turso.env`（权限 600）。用法:
+打开 http://localhost:3000，输入访问密码（默认 `changeme`，在 `docker-compose.yml` 改）。
+
+**手动查库：**
 
 ```bash
-turso db shell id-<身份名>          # 直接 SQL 操作
-source identities/<身份名>/.turso.env  # 程序里用 TURSO_URL / TURSO_AUTH_TOKEN
+sqlite3 ./data/id.db
+# 或
+docker compose exec web sqlite3 /app/data/id.db
 ```
 
 常用 SQL 示例见 `template/data/schema.sql` 末尾注释。
@@ -88,7 +93,7 @@ source identities/<身份名>/.turso.env  # 程序里用 TURSO_URL / TURSO_AUTH_
 | 数据 | 放哪 |
 | --- | --- |
 | 密码、密钥、恢复码（机密） | `passwords/*.kdbx` |
-| 账号名、地址、偏好、事件（非机密个人信息） | 各身份自己的 Turso 库 `id-<身份名>` |
+| 账号名、地址、偏好、事件（非机密个人信息） | SQLite 库 `./data/id.db`（所有身份共用） |
 | 身份档案与喜好（给人和 AI 看） | `profile.md` |
 
 ## 同步与备份（待接入）

@@ -11,7 +11,8 @@
 | `scripts/` | 工具脚本，如 `add-identity.sh` |
 | `config` | 新建密码库的初始主密码（`kdbx_initial_password`，权限 600） |
 | `assets/` | 工具安装包（KeePassXC 各平台客户端等），只放安装包、不放身份数据 |
-| `web/` | Web 界面（Next.js），查看/编辑 Turso 库里的非机密信息 |
+| `web/` | Web 界面（Next.js），查看/编辑 SQLite 库里的非机密信息，Docker 部署 |
+| `data/` | SQLite 数据库文件（`id.db`），随 Syncthing 同步 |
 | `logs/` | 脚本操作日志（`scripts.log`，只记操作、不记秘密，权限 700） |
 
 ## 身份目录内的文件
@@ -23,7 +24,7 @@
 | `profile.md` | 该身份的档案：基本信息、喜好、习惯、备忘 |
 | `AGENTS.md` | 给 AI 的身份级指引 |
 | `passwords/template.kdbx` | 旧的空白密码库壳。新建身份不再复制它，而是按 `config` 里的密码当场生成 |
-| `data/schema.sql` | Turso 个人信息表结构（非机密数据，每个身份一个库） |
+| `data/schema.sql` | SQLite 个人信息表结构（非机密数据，所有身份共用一个库） |
 | `documents/` | 证件扫描件、重要文件 |
 | `keys/` | SSH / GPG 密钥 |
 | `notes/` | 文本笔记 |
@@ -48,7 +49,7 @@
 | 归谁 | 路径 |
 | --- | --- |
 | git（脚本和文档） | `scripts/`、`template/`、`assets/`、`AGENTS.md`、`README.md`、`MAINTENANCE.md`、`.gitignore`、`.stignore` |
-| Syncthing（身份数据） | `identities/`、`config` |
+| Syncthing（身份数据） | `identities/`、`config`、`data/` |
 | 两边都不要 | `logs/`、各身份的 `.turso.env`、`.git` |
 
 `.stignore` 排除 git 那一侧和 `.git`，避免仓库被同步写坏。`.gitignore` 排除身份数据。本机仓库已初始化，跟踪上表里 git 那一行。新设备克隆私有远程来部署项目；远程还没建好时，仓库只在这台机器上。只开 Syncthing 的话，那边不会有 `scripts/` 和 `template/`。

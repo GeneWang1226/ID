@@ -7,11 +7,8 @@ export async function POST(request: Request) {
     if (!identity || !title) {
       return NextResponse.json({ error: "missing fields" }, { status: 400 });
     }
-    const db = getDb(identity);
-    await db.execute({
-      sql: "INSERT INTO events (title, detail) VALUES (?, ?)",
-      args: [title, detail ?? ""],
-    });
+    const db = getDb();
+    db.prepare("INSERT INTO events (identity, title, detail) VALUES (?, ?, ?)").run(identity, title, detail ?? "");
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });

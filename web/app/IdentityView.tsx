@@ -52,18 +52,14 @@ export default function IdentityView({
     await fetch(`/api/items/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identity, value }),
+      body: JSON.stringify({ value }),
     });
     router.refresh();
   }
 
   async function deleteItem(id: number) {
     if (!confirm("确定删除这条记录？")) return;
-    await fetch(`/api/items/${id}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identity }),
-    });
+    await fetch(`/api/items/${id}`, { method: "DELETE" });
     router.refresh();
   }
 
@@ -83,11 +79,7 @@ export default function IdentityView({
 
   async function deleteEvent(id: number) {
     if (!confirm("确定删除这条事件？")) return;
-    await fetch(`/api/events/${id}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identity }),
-    });
+    await fetch(`/api/events/${id}`, { method: "DELETE" });
     router.refresh();
   }
 
