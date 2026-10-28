@@ -15,7 +15,8 @@
 | `make pass-add name=gene title="..." user="..."` | 新增条目并自动生成强密码 |
 | `make pass-add-manual name=gene title="..."` | 新增条目，手动输入密码 |
 | `make web` / `make web-stop` / `make web-logs` | 启停 Web 界面、看日志 |
-| `make db` | 打开 SQLite 交互查询 |
+| `make show identity=gene` | 打印该身份的全部条目和事件 |
+| `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
 | `make item identity=gene cat=account key=proton-email value="gene@proton.me"` | 写/改条目 |
 | `make event identity=gene title="注册 Proton 邮箱"` | 记事件 |
 | `make status` | 身份、条目数、Web 状态总览 |
