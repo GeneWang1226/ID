@@ -20,6 +20,7 @@
 | `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
 | `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
 | `make event id=gene` | 记事件（逐个询问标题/详情） |
+| `make ai` / `make ai file=资料.txt` | AI 整理一段资料，确认后写入（先在 `config` 填 `ai_api_key`） |
 | `make status` | 身份、条目数、Web 状态总览 |
 | `make backup` | 备份 SQLite 库到 `backups/` |
 
@@ -49,6 +50,13 @@ make new id=gene
 3. **记一笔事件**：`make event id=gene`
 
 > 注意：`make item` / `make event` 的值里别用单引号，用双引号包整个值。
+
+### 用 AI 整理（`make ai`）
+
+在 `config` 里填 `ai_api_key` 后，把杂乱资料粘贴进去（或 `make ai file=资料.txt`），AI 会整理成条目/事件草稿，**确认后才写库**；识别到的密码、授权码、助记词只列提醒，由你手动 `make pass-add-manual` 存 kdbx。
+
+- 云端 API（默认阿里云百炼 `qwen-plus`）：整理质量稳，但**只发非机密资料，绝不粘贴密码/授权码/助记词**
+- 本地模型：`config` 里换 `ai_base_url=http://localhost:11434/v1`、`ai_model=qwen3:8b`（需先装 Ollama），数据不出机，但小服务器上较慢
 
 ## 场景三：查看和修改信息
 

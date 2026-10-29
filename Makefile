@@ -6,7 +6,7 @@
 
 DB := data/id.db
 
-.PHONY: help new passwd pass pass-show pass-list pass-add pass-add-manual web web-stop web-logs db db-init show item event status backup
+.PHONY: help new passwd pass pass-show pass-list pass-add pass-add-manual web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  make %-16s %s\n", $$1, $$2}'
@@ -92,6 +92,9 @@ event: db-init ## 记事件（id=gene，缺省逐个询问；值里别用单引�
 	dv="$(detail)"; [ -n "$$dv" ] || read -p "详情(可空): " dv; \
 	test -n "$$iv" -a -n "$$tv" || { echo "错误: 身份和标题不能为空"; exit 1; }; \
 	sqlite3 $(DB) "INSERT INTO events(identity,title,detail) VALUES('$$iv','$$tv','$$dv');"
+
+ai: ## AI 整理资料（make ai file=资料.txt 或直接粘贴后 Ctrl+D）
+	@scripts/ai-organize.py $(file)
 
 status: db-init ## 总览：身份列表、各身份条目数、Web 运行状态
 	@echo "== 身份 =="; ls identities/

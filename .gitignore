@@ -22,3 +22,6 @@ backups/
 # 系统垃圾
 .DS_Store
 Thumbs.db
+
+# Python 缓存
+__pycache__/
