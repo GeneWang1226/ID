@@ -36,43 +36,43 @@ new: ## 新增身份（id=gene）
 	scripts/add-identity.sh "$$v"
 
 passwd: ## 修改某身份 kdbx 主密码（id=gene）
-	@v="$(id)"; [ -n "$$v" ] || read -p "$$(printf '$(PR)身份名: $(N)')" v; \
+	@v="$(id)"; [ -n "$$v" ] || v="$$(scripts/select-identity.sh)"; \
 	[ -n "$$v" ] || { printf '$(ER)错误: 身份名不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli db-edit --set-password "identities/$$v/passwords/$$v.kdbx"
 
 pass: ## 复制密码到剪贴板，10 秒后自动清空（id=gene title="..."）
-	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli clip "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
 pass-show: ## 显示整条记录（id=gene title="..."）
-	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli show "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
 pass-list: ## 列出某身份 kdbx 里所有条目（id=gene）
-	@iv="$(id)"; [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)"; [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	[ -n "$$iv" ] || { printf '$(ER)错误: 身份不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli ls "identities/$$iv/passwords/$$iv.kdbx"
 
 pass-add: ## 新增条目并自动生成强密码（id=gene，缺省逐个询问）
-	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	uv="$(user)";  [ -n "$$uv" ] || read -p "$$(printf '$(PR)用户名(可空): $(N)')" uv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli add -g -L 20 -l -U -n -s --every-group --exclude-similar -u "$$uv" "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
-pass-add-manual: ## 新增条目，手动输入密码（id=gene，缺省逐个询问）
-	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+pass-add-manual: ## 新增条目，手动输入密码（id=gene title="..."，缺省逐个询问）
+	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	uv="$(user)";  [ -n "$$uv" ] || read -p "$$(printf '$(PR)用户名(可空): $(N)')" uv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli add -p -u "$$uv" "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
 grant: ## 签发临时凭证给 AI 用（id=gene title="..." ttl=600，缺省逐个询问）
-	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	scripts/grant-secret.sh "$$iv" "$$tv" $(if $(ttl),--ttl $(ttl),)
@@ -94,7 +94,7 @@ revoke: ## 撤销凭证（token=... 或 all=1）
 	scripts/revoke-grant.sh "$$tv"; fi
 
 tag: ## 给 kdbx 条目打/改/清标签（id=gene title="..." tags=ai-deny；tags= 空则清除）
-	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	gv='$(tags)'; [ -n "$$gv" ] || read -p "$$(printf '$(PR)标签(多个用;分隔，直接回车清除): $(N)')" gv; \
@@ -119,7 +119,7 @@ db: db-init ## 打开 SQLite 交互式查询
 	sqlite3 $(DB)
 
 show: db-init ## 打印某身份的全部信息（id=gene）
-	@iv="$(id)"; [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)"; [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	[ -n "$$iv" ] || { printf '$(ER)错误: 身份不能为空$(N)\n' >&2; exit 1; }; \
 	printf '$(H)== %s 的条目 ==$(N)\n' "$$iv"; \
 	sqlite3 -header -column $(DB) "SELECT category AS '分类', key AS '名称', value AS '内容', note AS '备注', updated_at AS '更新时间' FROM items WHERE identity='$$iv' ORDER BY category, key;"; \
@@ -127,7 +127,7 @@ show: db-init ## 打印某身份的全部信息（id=gene）
 	sqlite3 -header -column $(DB) "SELECT happened_at AS '时间', title AS '标题', detail AS '详情' FROM events WHERE identity='$$iv' ORDER BY happened_at DESC;"
 
 item: db-init ## 写/改条目（id=gene，缺省逐个询问；值里别用单引号）
-	@iv="$(id)";     [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)";     [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	cv="$(cat)";    [ -n "$$cv" ] || read -p "$$(printf '$(PR)分类(account/address/preference/id-info/contact): $(N)')" cv; \
 	kv="$(key)";    [ -n "$$kv" ] || read -p "$$(printf '$(PR)名称: $(N)')" kv; \
 	vv="$(value)";  [ -n "$$vv" ] || read -p "$$(printf '$(PR)内容: $(N)')" vv; \
@@ -137,22 +137,19 @@ item: db-init ## 写/改条目（id=gene，缺省逐个询问；值里别用单�
 	printf '$(OK)✓ 已写入 %s/%s$(N)\n' "$$iv" "$$kv"
 
 event: db-init ## 记事件（id=gene，缺省逐个询问；值里别用单引号）
-	@iv="$(id)";     [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	@iv="$(id)";     [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)";  [ -n "$$tv" ] || read -p "$$(printf '$(PR)标题: $(N)')" tv; \
 	dv="$(detail)"; [ -n "$$dv" ] || read -p "$$(printf '$(PR)详情(可空): $(N)')" dv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	sqlite3 $(DB) "INSERT INTO events(identity,title,detail) VALUES('$$iv','$$tv','$$dv');" && \
 	printf '$(OK)✓ 已记录: %s$(N)\n' "$$tv"
 
-ai: ## AI 整理资料（id=gene file=资料.txt；缺 id 会先问身份，再粘贴 Ctrl+D）
+ai: ## AI 整理资料（↑/↓选身份；空行提交；结果后可执行命令或继续提问；流式/思考由 .env 控制）
 	@iv="$(id)"; fv="$(file)"; \
-	if [ -n "$$iv" ]; then \
-		if [ -n "$$fv" ]; then scripts/ai-organize.py --identity "$$iv" "$$fv"; \
-		else scripts/ai-organize.py --identity "$$iv"; fi; \
-	else \
-		if [ -n "$$fv" ]; then scripts/ai-organize.py "$$fv"; \
-		else scripts/ai-organize.py; fi; \
-	fi
+	[ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
+	[ -n "$$iv" ] || { printf '$(ER)错误: 身份不能为空$(N)\n' >&2; exit 1; }; \
+	if [ -n "$$fv" ]; then scripts/ai-organize.py --identity "$$iv" "$$fv"; \
+	else scripts/ai-organize.py --identity "$$iv"; fi
 
 status: db-init ## 总览：身份列表、各身份条目数、Web 运行状态
 	@printf '$(H)== 身份 ==$(N)\n'; ls identities/

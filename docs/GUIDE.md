@@ -4,7 +4,7 @@
 
 ## 命令速查
 
-全部在 `~/ID` 下执行，输入 `make help` 可随时查看。参数统一用 `id=` 指身份；**任何参数都可以不给，缺的会逐个询问**——比如 `make pass-add id=gene` 会先问标题、用户名，再提示输主密码。
+全部在 `~/ID` 下执行，输入 `make help` 可随时查看。参数统一用 `id=` 指身份；**任何参数都可以不给，缺的会逐个询问**。选择已有身份时可用 ↑/↓ 高亮、Enter 确认；比如 `make pass-add` 会先选身份，再问标题、用户名和主密码。
 
 > 提交代码或开启同步前，先跑 `make check` 自检：ignore 规则、git 追踪、权限、明文机密一次查完。
 
@@ -16,7 +16,7 @@
 | `make pass-show id=gene title="..."` | 显示整条记录（无桌面/剪贴板时用） |
 | `make pass-list id=gene` | 列出该身份 kdbx 里所有条目 |
 | `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
-| `make pass-add-manual id=gene` | 新增条目，手动输入密码 |
+| `make pass-add-manual id=gene title="..."` | 新增条目，手动输入密码 |
 | `make grant id=gene title="..."` | 签发临时凭证，让 AI 不见明文地用密码 |
 | `make use token=... cmd='...'` | 用凭证代执行命令（密码经 `$ID_SECRET` 注入） |
 | `make grants` / `make revoke` | 列出活跃凭证 / 撤销（`revoke all=1` 全撤） |
@@ -25,7 +25,7 @@
 | `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
 | `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
 | `make event id=gene` | 记事件（逐个询问标题/详情） |
-| `make ai id=jacob` / `make ai id=jacob file=资料.txt` | AI 整理资料（**先指定身份**；会展示模型 JSON 与草稿，确认后才写 SQLite；不写 kdbx，不涉及主密码） |
+| `make ai id=jacob` / `make ai id=jacob file=资料.txt` | AI 整理资料（**先指定身份**；交互模式空行提交，显示 `AI ›` 回复与草稿，确认后才写 SQLite；不写 kdbx，不涉及主密码） |
 | `make check` | 安全自检（提交/同步前必跑） |
 | `make status` | 身份、条目数、Web 状态总览 |
 | `make backup` | 备份 SQLite 库到 `backups/` |
@@ -59,7 +59,9 @@ make new id=gene
 
 ### 用 AI 整理（`make ai`）
 
-在 `.env` 里填 `ai_api_key` 后，把杂乱资料粘贴进去（或 `make ai file=资料.txt`），AI 会整理成条目/事件草稿，**确认后才写库**；识别到的密码、授权码、助记词只列提醒，由你手动 `make pass-add-manual` 存 kdbx。
+在 `.env` 里填 `ai_api_key` 后，运行 `make ai`，用方向键选择身份，粘贴杂乱资料并输入空行提交；也可以用 `make ai id=gene file=资料.txt`。AI 会先打印 `AI ›` 回复和条目/事件草稿，**确认后才写库**；识别到机密时会给出带预填标题的 `make pass-add-manual` 命令，按回车可直接进入密码录入，密码内容仍由你在终端输入。
+
+保存密码后，下一步可选择“复制刚保存的密码到剪贴板”，等价于执行 `make pass id=gene title="GitHub 账户密码"`；密码不会打印到终端，剪贴板按现有规则自动清空。`.env` 中可设置 `ai_stream=1` 开启流式显示、`ai_thinking=1` 开启 Qwen 思考模式，并用 `ai_thinking_budget` 限制思考 token；这些开关默认关闭。
 
 - 云端 API（默认阿里云百炼 `qwen-plus`）：整理质量稳，但**只发非机密资料，绝不粘贴密码/授权码/助记词**
 - 本地模型：`.env` 里换 `ai_base_url=http://localhost:11434/v1`、`ai_model=qwen3:8b`（需先装 Ollama），数据不出机，但小服务器上较慢
