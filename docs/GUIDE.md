@@ -56,6 +56,7 @@ make new id=gene
 ## 场景三：查看和修改信息
 
 - 不想敲命令：`make web` 后开 http://localhost:3000 （默认密码 `changeme`，在 `docker-compose.yml` 改）
+- **AI 助手**：登录后点「✦ AI 助手」→ 选身份、粘贴或附加文本文件，AI 整理成条目/事件草稿，勾选后确认写库；每条回复可展开「模型原始输出」。需在项目根 `.env`（Compose 自动读取，不入 git）里配置 `ai_api_key` 等，改后 `docker compose up -d --build` 生效
 - 命令行：`make db` 进 SQLite 交互模式，查询示例见 `template/data/schema.sql` 末尾注释
 
 ## 场景四：让 AI 用密码干活（分级授权）
