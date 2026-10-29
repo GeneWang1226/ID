@@ -17,9 +17,8 @@ function initDb(): Database.Database {
 
   db = new Database(dbPath);
 
-  // Initialize schema if database is empty
-  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='items'").get();
-  if (!tables && existsSync(schemaPath)) {
+  // 表结构全是 IF NOT EXISTS，幂等，每次启动都跑一遍（新加的表在老库上也能补出来）
+  if (existsSync(schemaPath)) {
     const schema = readFileSync(schemaPath, "utf-8");
     db.exec(schema);
   }

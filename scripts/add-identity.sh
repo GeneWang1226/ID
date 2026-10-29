@@ -8,7 +8,7 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_DIR="$BASE_DIR/template"
 IDENTITIES_DIR="$BASE_DIR/identities"
-CONFIG_FILE="$BASE_DIR/config"
+CONFIG_FILE="$BASE_DIR/.env"
 
 # 操作日志（只记操作，绝不记秘密内容）
 LOG_DIR="$BASE_DIR/logs"
@@ -16,13 +16,20 @@ mkdir -p "$LOG_DIR"
 chmod 700 "$LOG_DIR"
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_DIR/scripts.log"; }
 
+# 颜色（仅终端输出时生效；管道/重定向自动无色）
+if [[ -t 1 ]]; then
+    C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_HEAD=$'\033[1;36m'; C_DIM=$'\033[2m'; C_N=$'\033[0m'
+else
+    C_OK=''; C_WARN=''; C_HEAD=''; C_DIM=''; C_N=''
+fi
+
 usage() {
     echo "用法: $(basename "$0") <身份名>" >&2
     echo "  身份名只允许: 小写字母、数字、连字符、下划线（例: work, personal-2）" >&2
     exit 1
 }
 
-# 从 config 读取新建密码库的初始主密码。调用方不得把返回值写入日志或终端。
+# 从 .env 读取新建密码库的初始主密码。调用方不得把返回值写入日志或终端。
 read_kdbx_initial_password() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
         echo "错误: 找不到 $CONFIG_FILE" >&2
@@ -51,7 +58,7 @@ read_kdbx_initial_password() {
     printf '%s' "$val"
 }
 
-# 用 config 里的初始密码新建空白库。密码只经 stdin 传给 KeePassXC，不进参数、日志或输出。
+# 用 .env 里的初始密码新建空白库。密码只经 stdin 传给 KeePassXC，不进参数、日志或输出。
 create_kdbx() {
     local dest="$1"
     local password err
@@ -105,7 +112,7 @@ else
     chmod 700 "$TARGET"
 fi
 
-# ===== 密码库：缺失时用 config 里的初始密码新建，绝不覆盖已有库 =====
+# ===== 密码库：缺失时用 .env 里的初始密码新建，绝不覆盖已有库 =====
 mkdir -p "$TARGET/passwords"
 CREATED_KDBX=0
 if [[ ! -f "$KDBX" ]]; then
@@ -119,9 +126,9 @@ fi
 
 if [[ "$MODE" == "create" ]]; then
     log "add-identity create $NAME"
-    echo "已创建身份目录: $TARGET"
+    printf '%s已创建身份目录:%s %s\n' "$C_OK" "$C_N" "$TARGET"
     echo
-    echo "结构:"
+    printf '%s结构:%s\n' "$C_HEAD" "$C_N"
     find "$TARGET" -mindepth 1 | sort | sed "s|$TARGET/||"
 else
     if [[ ${#ADDED[@]} -eq 0 ]]; then
@@ -135,12 +142,12 @@ else
 fi
 
 echo
-echo "下一步建议:"
+printf '%s下一步建议:%s\n' "$C_HEAD" "$C_N"
 echo "  1. 填写 $TARGET/profile.md（身份档案与喜好）"
 if [[ "$CREATED_KDBX" -eq 1 ]]; then
-    echo "  2. ⚠️  密码库已用 config 里的 kdbx_initial_password 创建，请尽快改成这个身份自己的主密码:"
+    printf '  2. %s⚠️  密码库已用 .env 里的 kdbx_initial_password 创建，请尽快改成这个身份自己的主密码:%s\n' "$C_WARN" "$C_N"
     echo "       keepassxc-cli db-edit --set-password $KDBX"
-    echo "     第一条提示输入的是 config 中的初始密码，之后两遍输入新密码。"
+    printf '     %s第一条提示输入的是 .env 中的初始密码，之后两遍输入新密码。%s\n' "$C_DIM" "$C_N"
 else
     echo "  2. 密码库已存在，本次未改动。"
 fi

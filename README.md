@@ -14,7 +14,7 @@
 | `identities/` | 所有身份目录，每个身份一个子目录（如 `identities/gene/`） |
 | `scripts/` | 工具脚本，如 `add-identity.sh` |
 | `Makefile` | 常用操作入口，`make help` 查看 |
-| `config` | 新建密码库的初始主密码（`kdbx_initial_password`，权限 600） |
+| `.env` / `.env.example` | 配置：初始主密码、AI API、WEB_PASSWORD（真实文件权限 600 不进 git，模板入库） |
 | `assets/` | 工具安装包（KeePassXC 各平台客户端等），只放安装包、不放身份数据 |
 | `web/` | Web 界面（Next.js），查看/编辑 SQLite 库里的非机密信息，Docker 部署 |
 | `data/` | SQLite 数据库文件（`id.db`），随 Syncthing 同步 |
@@ -28,7 +28,7 @@
 | --- | --- |
 | `profile.md` | 该身份的档案：基本信息、喜好、习惯、备忘 |
 | `AGENTS.md` | 给 AI 的身份级指引 |
-| `passwords/<身份名>.kdbx` | 密码库，新建身份时按 `config` 里的初始密码当场生成 |
+| `passwords/<身份名>.kdbx` | 密码库，新建身份时按 `.env` 里的初始密码当场生成 |
 | `data/schema.sql` | SQLite 个人信息表结构（非机密数据，所有身份共用一个库） |
 | `documents/` | 证件扫描件、重要文件 |
 | `keys/` | SSH / GPG 密钥 |
@@ -42,14 +42,32 @@
 | 归谁 | 路径 |
 | --- | --- |
 | git（脚本和文档） | `scripts/`、`template/`、`assets/`、`docs/`、`web/`、`Makefile`、`AGENTS.md`、`README.md`、`.gitignore`、`.stignore` |
-| Syncthing（身份数据） | `identities/`、`config`、`data/` |
+| Syncthing（身份数据） | `identities/`、`.env`、`data/` |
 | 两边都不要 | `logs/`、`backups/`、`.git` |
 
 `.stignore` 排除 git 那一侧和 `.git`，避免仓库被同步写坏。`.gitignore` 排除身份数据。新设备克隆私有远程部署项目；只开 Syncthing 的话，那边不会有 `scripts/` 和 `template/`。
+
+## keepassxc-cli 的局限（为什么打标签要绕道）
+
+`keepassxc-cli` 只是 KeePassXC 的附属工具，定位是查询和常见自动化，不少 GUI 功能没做进去：
+
+| 功能 | CLI | GUI |
+| --- | --- | --- |
+| 增删改条目、改主密码、生成密码、附件导入导出 | ✓ | ✓ |
+| 读写 Tags | 只能 `show` 读 | ✓ 可写 |
+| 自定义字段（TOTP 种子、额外属性） | 只能读 | ✓ 可写 |
+| 条目历史、回收站 | ✗ | ✓ |
+| Auto-Type 序列、浏览器集成配置 | ✗ | ✓ |
+| 自定义图标 | ✗ | ✓ |
+
+分级授权需要的 `ai-auto` / `ai-deny` 标签就是「只能读不能写」的那类。本项目的解法：
+
+- **服务器端**：`make tag id=<身份> title=<条目> tags=ai-deny`（[scripts/tag-entry.sh](scripts/tag-entry.sh)，原理是 `keepassxc-cli` 导出 XML → 注入标签 → 导入新库 → 验证后原子替换；临时 XML 只放 tmpfs 用完即删，主密码只经 stdin 传递）
+- **桌面端**：也可以在 KeePassXC 图形客户端里打，标签随 kdbx 经 Syncthing 同步
 
 ## 安全规则
 
 - 身份目录权限为 `700`，密钥类文件建议 `600`。
 - 本目录内容属于敏感数据，不要提交到任何公开仓库。
 - `.kdbx` 密码库始终用 KeePass(XC) 打开。各身份自己的主密码不要写进任何文件。
-- 新建空白库用的初始密码只放在根目录 `config`（权限 600）。脚本不得把它打进日志或终端。
+- 新建空白库用的初始密码只放在根目录 `.env`（权限 600，模板见 `.env.example`）。脚本不得把它打进日志或终端。

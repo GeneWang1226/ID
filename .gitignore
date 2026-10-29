@@ -9,8 +9,8 @@
 # 身份数据归 Syncthing（见 .stignore），整棵目录不进 git
 identities/
 
-# 新建密码库的初始主密码
-config
+# 真实配置（初始密码、API key）。模板 .env.example 反而要入库
+.env
 
 # 脚本操作日志
 logs/
@@ -22,3 +22,10 @@ backups/
 # 系统垃圾
 .DS_Store
 Thumbs.db
+
+# Python 缓存
+__pycache__/
+
+# Node / Next.js 构建产物（package-lock.json 反而要入库，Docker 构建要 npm ci）
+node_modules/
+.next/

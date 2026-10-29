@@ -6,6 +6,8 @@
 
 全部在 `~/ID` 下执行，输入 `make help` 可随时查看。参数统一用 `id=` 指身份；**任何参数都可以不给，缺的会逐个询问**——比如 `make pass-add id=gene` 会先问标题、用户名，再提示输主密码。
 
+> 提交代码或开启同步前，先跑 `make check` 自检：ignore 规则、git 追踪、权限、明文机密一次查完。
+
 | 命令 | 作用 |
 | --- | --- |
 | `make new id=gene` | 新增身份 |
@@ -23,6 +25,8 @@
 | `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
 | `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
 | `make event id=gene` | 记事件（逐个询问标题/详情） |
+| `make ai id=jacob` / `make ai id=jacob file=资料.txt` | AI 整理资料（**先指定身份**；会展示模型 JSON 与草稿，确认后才写 SQLite；不写 kdbx，不涉及主密码） |
+| `make check` | 安全自检（提交/同步前必跑） |
 | `make status` | 身份、条目数、Web 状态总览 |
 | `make backup` | 备份 SQLite 库到 `backups/` |
 
@@ -38,7 +42,7 @@ make new id=gene
 然后做三件事：
 
 1. 填 `identities/gene/profile.md`（档案与喜好）
-2. `make passwd id=gene` 把空白库改成该身份自己的主密码（第一条提示输 `config` 里的初始密码）
+2. `make passwd id=gene` 把空白库改成该身份自己的主密码（第一条提示输 `.env` 里的初始密码）
 3. 有身份专属规则就补 `identities/gene/AGENTS.md`
 
 同一身份要开多个「分身」（多个手机号、多套银行卡）：`make new id=gene_2`，在 `profile.md` 写明用途。
@@ -53,9 +57,17 @@ make new id=gene
 
 > 注意：`make item` / `make event` 的值里别用单引号，用双引号包整个值。
 
+### 用 AI 整理（`make ai`）
+
+在 `.env` 里填 `ai_api_key` 后，把杂乱资料粘贴进去（或 `make ai file=资料.txt`），AI 会整理成条目/事件草稿，**确认后才写库**；识别到的密码、授权码、助记词只列提醒，由你手动 `make pass-add-manual` 存 kdbx。
+
+- 云端 API（默认阿里云百炼 `qwen-plus`）：整理质量稳，但**只发非机密资料，绝不粘贴密码/授权码/助记词**
+- 本地模型：`.env` 里换 `ai_base_url=http://localhost:11434/v1`、`ai_model=qwen3:8b`（需先装 Ollama），数据不出机，但小服务器上较慢
+
 ## 场景三：查看和修改信息
 
-- 不想敲命令：`make web` 后开 http://localhost:3000 （默认密码 `changeme`，在 `docker-compose.yml` 改）
+- 不想敲命令：`make web` 后开 http://localhost:3000 （访问密码在 `.env` 的 `WEB_PASSWORD`）
+- **AI 助手**：Web 左侧「✦ AI 助手」进对话页——粘贴资料或附加文本文件，AI 整理成条目/事件草稿，**勾选确认后才写库**；机密只列提醒。对话和草稿都存库可回看，每条回复可展开「模型原始输出」。AI 配置用 `.env` 的 `ai_api_key` 等（docker compose 启动时注入容器）
 - 命令行：`make db` 进 SQLite 交互模式，查询示例见 `template/data/schema.sql` 末尾注释
 
 ## 场景四：让 AI 用密码干活（分级授权）
@@ -78,7 +90,7 @@ make use token=<token> cmd='curl -u "user:$$ID_SECRET" https://example.com'
 
 3. 随时 `make grants` 看活跃凭证，`make revoke token=...` 或 `make revoke all=1` 撤销。
 
-**分级**（给条目打 Tag，在 KeePassXC 图形客户端操作，服务器端只读）：
+**分级**（给条目打 Tag：`make tag id=jacob title="..." tags=ai-deny`，或在 KeePassXC 图形客户端打）：
 
 | Tag | 行为 | 适合 |
 | --- | --- | --- |
@@ -94,8 +106,8 @@ make use token=<token> cmd='curl -u "user:$$ID_SECRET" https://example.com'
 
 1. 装 KeePassXC、Docker、Syncthing（见 [MAINTENANCE.md](MAINTENANCE.md)）
 2. `git clone <私有仓库> ~/ID` 拿到脚本、模板和文档
-3. Syncthing 把 `~/ID` 加为同步文件夹，等 `identities/`、`config`、`data/id.db` 同步过来
-4. 确认 `config` 权限是 `600`，`make status` 检查一遍
+3. Syncthing 把 `~/ID` 加为同步文件夹，等 `identities/`、`.env`、`data/id.db` 同步过来（没有就先 `cp .env.example .env` 再填）
+4. 确认 `.env` 权限是 `600`，`make status` 检查一遍
 
 ## 场景六：删除一个身份
 
