@@ -27,6 +27,15 @@ CONFIG = BASE_DIR / "config"
 DB = BASE_DIR / "data" / "id.db"
 SCHEMA = BASE_DIR / "template" / "data" / "schema.sql"
 
+# 颜色（仅终端输出时生效；管道/重定向自动无色）
+_TTY = sys.stdout.isatty()
+def c(code: int, s: str) -> str:
+    return f"\033[{code}m{s}\033[0m" if _TTY else s
+def head(s: str) -> str: return c(96, s)    # 亮青标题
+def ok(s: str) -> str:   return c(32, s)    # 绿
+def warn(s: str) -> str: return c(33, s)    # 黄
+def dim(s: str) -> str:  return c(2, s)     # 暗灰
+
 SYSTEM_PROMPT = """你是个人资料整理助手。用户会给你一段杂乱的资料文本，你要提取成结构化数据。
 
 输出**只包含一个 JSON 对象**，不要任何其他文字，格式：
@@ -87,10 +96,10 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] not in ("-", ""):
         text = Path(sys.argv[1]).read_text()
     else:
-        print("请粘贴资料，输入完成后按 Ctrl+D:", file=sys.stderr)
+        print(c(36, "请粘贴资料，输入完成后按 Ctrl+D:"), file=sys.stderr)
         text = sys.stdin.read()
     if not text.strip():
-        print("错误: 没有输入内容", file=sys.stderr)
+        print(c(31, "错误: 没有输入内容"), file=sys.stderr)
         return 1
 
     cfg = read_config()
@@ -98,38 +107,38 @@ def main() -> int:
     base_url = cfg.get("ai_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     model = cfg.get("ai_model", "qwen-plus")
     if not api_key:
-        print("错误: config 里还没有 ai_api_key。请填入后重试（见脚本头部注释）", file=sys.stderr)
+        print(c(31, "错误: config 里还没有 ai_api_key。请填入后重试（见脚本头部注释）"), file=sys.stderr)
         return 1
 
-    print(f"==> 调用 {model} 整理中...", file=sys.stderr)
+    print(dim(f"==> 调用 {model} 整理中..."), file=sys.stderr)
     try:
         draft = call_ai(base_url, api_key, model, text)
     except Exception as e:
-        print(f"错误: AI 调用失败: {e}", file=sys.stderr)
+        print(c(31, f"错误: AI 调用失败: {e}"), file=sys.stderr)
         return 1
 
     items = draft.get("items") or []
     events = draft.get("events") or []
     secrets = draft.get("secrets") or []
 
-    print("\n===== 草稿：条目 =====")
+    print("\n" + head("===== 草稿：条目 ====="))
     for i, it in enumerate(items, 1):
-        print(f"{i}. [{it.get('identity','')}] {it.get('category','')}/{it.get('key','')} = {it.get('value','')}  ({it.get('note','')})")
-    print("\n===== 草稿：事件 =====")
+        print(f"{i}. [{it.get('identity','')}] {it.get('category','')}/{it.get('key','')} = {it.get('value','')}  {dim('(' + it.get('note','') + ')')}")
+    print("\n" + head("===== 草稿：事件 ====="))
     for i, ev in enumerate(events, 1):
-        print(f"{i}. [{ev.get('identity','')}] {ev.get('title','')} — {ev.get('detail','')}")
+        print(f"{i}. [{ev.get('identity','')}] {ev.get('title','')} — {dim(ev.get('detail',''))}")
     if secrets:
-        print("\n===== 机密提醒（不写入，需手动存 kdbx）=====")
+        print("\n" + warn("===== 机密提醒（不写入，需手动存 kdbx）====="))
         for i, s in enumerate(secrets, 1):
-            print(f"{i}. [{s.get('identity','')}] {s.get('title','')}（{s.get('kind','')}）→ make pass-add-manual id={s.get('identity','')}")
+            print(warn(f"{i}. [{s.get('identity','')}] {s.get('title','')}（{s.get('kind','')}）→ make pass-add-manual id={s.get('identity','')}"))
 
     if not items and not events:
-        print("\n没有可写入的内容。")
+        print("\n" + dim("没有可写入的内容。"))
         return 0
 
-    ans = input("\n确认写入 SQLite? [y/N] ").strip().lower()
+    ans = input("\n" + c(36, "确认写入 SQLite? [y/N] ")).strip().lower()
     if ans != "y":
-        print("已取消，未写入。")
+        print(dim("已取消，未写入。"))
         return 0
 
     DB.parent.mkdir(exist_ok=True)
@@ -149,7 +158,7 @@ def main() -> int:
         )
     conn.commit()
     conn.close()
-    print(f"已写入: {len(items)} 条 items, {len(events)} 条 events。")
+    print(ok(f"✓ 已写入: {len(items)} 条 items, {len(events)} 条 events。"))
     return 0
 
 

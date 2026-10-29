@@ -16,6 +16,13 @@ mkdir -p "$LOG_DIR"
 chmod 700 "$LOG_DIR"
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_DIR/scripts.log"; }
 
+# 颜色（仅终端输出时生效；管道/重定向自动无色）
+if [[ -t 1 ]]; then
+    C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_HEAD=$'\033[1;36m'; C_DIM=$'\033[2m'; C_N=$'\033[0m'
+else
+    C_OK=''; C_WARN=''; C_HEAD=''; C_DIM=''; C_N=''
+fi
+
 usage() {
     echo "用法: $(basename "$0") <身份名>" >&2
     echo "  身份名只允许: 小写字母、数字、连字符、下划线（例: work, personal-2）" >&2
@@ -119,9 +126,9 @@ fi
 
 if [[ "$MODE" == "create" ]]; then
     log "add-identity create $NAME"
-    echo "已创建身份目录: $TARGET"
+    printf '%s已创建身份目录:%s %s\n' "$C_OK" "$C_N" "$TARGET"
     echo
-    echo "结构:"
+    printf '%s结构:%s\n' "$C_HEAD" "$C_N"
     find "$TARGET" -mindepth 1 | sort | sed "s|$TARGET/||"
 else
     if [[ ${#ADDED[@]} -eq 0 ]]; then
@@ -135,12 +142,12 @@ else
 fi
 
 echo
-echo "下一步建议:"
+printf '%s下一步建议:%s\n' "$C_HEAD" "$C_N"
 echo "  1. 填写 $TARGET/profile.md（身份档案与喜好）"
 if [[ "$CREATED_KDBX" -eq 1 ]]; then
-    echo "  2. ⚠️  密码库已用 config 里的 kdbx_initial_password 创建，请尽快改成这个身份自己的主密码:"
+    printf '  2. %s⚠️  密码库已用 config 里的 kdbx_initial_password 创建，请尽快改成这个身份自己的主密码:%s\n' "$C_WARN" "$C_N"
     echo "       keepassxc-cli db-edit --set-password $KDBX"
-    echo "     第一条提示输入的是 config 中的初始密码，之后两遍输入新密码。"
+    printf '     %s第一条提示输入的是 config 中的初始密码，之后两遍输入新密码。%s\n' "$C_DIM" "$C_N"
 else
     echo "  2. 密码库已存在，本次未改动。"
 fi

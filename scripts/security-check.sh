@@ -8,9 +8,16 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BASE_DIR"
 
 fail=0
-ok()  { printf '  ✓ %s\n' "$1"; }
-bad() { printf '  ✗ %s\n' "$1"; fail=1; }
-sec() { printf '\n== %s ==\n' "$1"; }
+# 颜色（仅终端输出时生效；管道/重定向自动无色）
+if [[ -t 1 ]]; then
+    H=$'\033[1;36m'; OK=$'\033[32m'; ER=$'\033[1;31m'; DM=$'\033[2m'; N=$'\033[0m'
+else
+    H=''; OK=''; ER=''; DM=''; N=''
+fi
+ok()  { printf '  %s✓%s %s\n' "$OK" "$N" "$1"; }
+bad() { printf '  %s✗%s %s\n' "$ER" "$N" "$1"; fail=1; }
+sec() { printf '\n%s== %s ==%s\n' "$H" "$1" "$N"; }
+dim() { printf '%s%s%s\n' "$DM" "$1" "$N"; }
 
 # ===== 1. ignore 文件重复行 =====
 check_dupes() {
@@ -20,7 +27,7 @@ check_dupes() {
     dupes=$(grep -vE '^\s*(#|//|$)' "$f" | sort | uniq -d)
     if [[ -n "$dupes" ]]; then
         bad "$f 有重复行:"
-        printf '%s\n' "$dupes" | sed 's/^/      /'
+        while IFS= read -r l; do dim "      $l"; done <<< "$dupes"
     else
         ok "$f 无重复行"
     fi
@@ -37,7 +44,7 @@ for pat in '^identities/' '^config$' '\.kdbx$' '\.turso\.env$' '^logs/' '^data/.
     hits="$(printf '%s\n' "$tracked" | grep -E "$pat" || true)"
     if [[ -n "$hits" ]]; then
         bad "被 git 追踪: $pat"
-        printf '%s\n' "$hits" | sed 's/^/      /'
+        while IFS= read -r l; do dim "      $l"; done <<< "$hits"
     else
         ok "未追踪: $pat"
     fi
@@ -88,15 +95,15 @@ sec "6. 追踪文件高危内容扫描"
 hits="$(git grep -lE 'BEGIN [A-Z ]*PRIVATE KEY|api_key=sk-[A-Za-z0-9]|AUTH_TOKEN=ey[A-Za-z0-9]' -- . 2>/dev/null || true)"
 if [[ -n "$hits" ]]; then
     bad "疑似机密写进了追踪文件:"
-    printf '%s\n' "$hits" | sed 's/^/      /'
+    while IFS= read -r l; do dim "      $l"; done <<< "$hits"
 else
     ok "未发现私钥 / API key / token 明文"
 fi
 
 sec "结果"
 if [[ "$fail" -eq 0 ]]; then
-    echo "全部通过 ✓"
+    printf '%s全部通过 ✓%s\n' "$OK" "$N"
 else
-    echo "存在失败项，请先处理再提交/同步"
+    printf '%s存在失败项，请先处理再提交/同步%s\n' "$ER" "$N"
     exit 1
 fi
