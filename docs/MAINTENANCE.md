@@ -71,6 +71,15 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 
 > `template/passwords/template.kdbx` 不再参与新建。脚本会当场 `db-create`。
 
+### 临时凭证（AI 代执行密码）
+
+`make grant` 把某条目的密码提取成临时凭证，AI 用 `make use` 代执行命令而不见明文（机制与分级 Tags 见 [GUIDE.md](GUIDE.md) 场景四）。维护要点：
+
+- 凭证在 `${XDG_RUNTIME_DIR:-/run/user/<uid>}/id-grants/`，tmpfs，**重启即清空**；目录权限 700，文件 600
+- 过期凭证在每次 `grant` / `grants` 时顺手清理，无需定时任务
+- 条目的 `ai-auto` / `ai-deny` 标签只能在 KeePassXC 图形客户端打（`keepassxc-cli` 没有写 tag 的能力），标签随 kdbx 经 Syncthing 同步
+- 日志只记「何时授权/使用了哪个条目」，出现泄露疑虑时 `grep grant logs/scripts.log` 核对后 `make revoke all=1`
+
 ### 修改模板
 
 直接编辑 `~/ID/template/` 下的目录和文件。**改动只影响之后新建的身份**，已有身份保持原样。
@@ -85,7 +94,7 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 docker compose up -d
 ```
 
-打开 http://localhost:3000，输入访问密码（默认 `changeme`，在 `docker-compose.yml` 改）。
+打开 http://localhost:3000，输入访问密码（在 `~/ID/.env` 的 `WEB_PASSWORD`，改后 `docker compose up -d` 生效）。
 
 **手动查库：**
 
@@ -115,5 +124,6 @@ docker compose exec web sqlite3 /app/data/id.db
 | 问题 | 处理 |
 | --- | --- |
 | 忘记某身份 kdbx 主密码 | 无法找回，从备份恢复；恢复码在 `recovery/` |
+| 凭证提示不存在/已过期 | tmpfs 重启清空或 TTL 到期，重新 `make grant`；`make grants` 看活跃凭证 |
 | sqlite3 命令找不到 | `sudo apt install sqlite3` |
 | 想删掉某身份 | 手动 `rm -rf identities/<身份名>`；SQLite 里对应的数据用 `DELETE FROM items WHERE identity='<身份名>'` 和 `DELETE FROM events WHERE identity='<身份名>'` 清理 |
