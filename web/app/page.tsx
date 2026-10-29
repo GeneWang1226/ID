@@ -36,6 +36,21 @@ export default async function Home({
         }}
       >
         <h1 style={{ fontSize: "1rem", marginTop: 0 }}>身份</h1>
+        <a
+          href="/ai"
+          style={{
+            display: "block",
+            marginBottom: "0.75rem",
+            padding: "0.375rem 0.5rem",
+            borderRadius: "0.375rem",
+            textDecoration: "none",
+            color: "#38bdf8",
+            border: "1px solid #334155",
+            fontSize: "0.875rem",
+          }}
+        >
+          ✦ AI 助手
+        </a>
         {identities.length === 0 && (
           <p style={{ color: "#64748b", fontSize: "0.875rem" }}>暂无身份数据</p>
         )}

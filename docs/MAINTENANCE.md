@@ -96,6 +96,8 @@ docker compose up -d
 
 打开 http://localhost:3000，输入访问密码（默认 `changeme`，在 `docker-compose.yml` 改）。
 
+Web 的 AI 助手（`/ai`）使用 `docker-compose.yml` 注入的 `AI_*` 环境变量；键名对应根目录 `.env` 里的 `ai_api_key`、`ai_base_url`、`ai_model`（Compose 做变量替换，与 `config` 里的 kdbx 初始密码文件分开）。修改后执行 `docker compose up -d --build`。
+
 **手动查库：**
 
 ```bash
