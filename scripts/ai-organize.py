@@ -256,6 +256,11 @@ def valid_rows(value: object, required: tuple[str, ...]) -> tuple[list[dict], in
     return rows, len(value) - len(rows)
 
 
+COPY_WORDS = ("查看", "看看", "看", "显示", "复制", "取出", "拿到", "使用", "查一下", "view", "show", "copy", "retrieve")
+SAVE_WORDS = ("保存", "存入", "存", "录入", "新增", "添加", "设置", "save", "add", "store", "create")
+SECRET_WORDS = ("密码", "授权码", "助记词", "密钥", "password", "passwd", "passcode", "token", "secret")
+
+
 def infer_secret_action(secret: dict, text: str) -> str:
     """模型未给 action 时，按用户动词避免把查看误当成新增。"""
     action = str(secret.get("action") or "").strip().lower()
@@ -264,9 +269,30 @@ def infer_secret_action(secret: dict, text: str) -> str:
     if action in {"save", "add", "store", "create", "set"}:
         return "save"
     lower = text.lower()
-    wants_copy = any(word in lower for word in ("查看", "看看", "显示", "复制", "取出", "拿到", "使用", "view", "show", "copy", "retrieve"))
-    wants_save = any(word in lower for word in ("保存", "存入", "存", "录入", "新增", "添加", "设置", "save", "add", "store", "create"))
+    wants_copy = any(word in lower for word in COPY_WORDS)
+    wants_save = any(word in lower for word in SAVE_WORDS)
     return "copy" if wants_copy and not wants_save else "save"
+
+
+def infer_lookup_secret(text: str, identity: str) -> dict | None:
+    """查看请求没有被模型列出时，生成不含密码内容的本地复制提示。"""
+    lower = text.lower()
+    if not any(word in lower for word in COPY_WORDS):
+        return None
+    if any(word in lower for word in SAVE_WORDS) or not any(word in lower for word in SECRET_WORDS):
+        return None
+
+    compact = re.sub(r"\s+", "", text)
+    match = re.search(r"([\u4e00-\u9fffA-Za-z0-9_.-]+?)(?:账号|账户)?密码", compact, re.I)
+    english_match = re.search(r"([A-Za-z0-9_.-]+)\s*(?:password|passwd|passcode)", text, re.I)
+    if not match and english_match:
+        match = english_match
+    title = "密码"
+    if match:
+        prefix = re.sub(r"^(?:(?:看看|查看|看|显示|帮我|帮忙|请|我的|我|这个|该|my|the))+", "", match.group(1), flags=re.I)
+        if prefix:
+            title = f"{prefix}密码"
+    return {"identity": identity, "title": title, "kind": "密码", "action": "copy"}
 
 
 def launch_secret_entries(secrets: list[dict]) -> list[dict]:
@@ -487,6 +513,12 @@ def main() -> int:
             normalize_identity(s, identity)
             s["action"] = infer_secret_action(s, text)
 
+        if not secrets:
+            lookup = infer_lookup_secret(text, identity)
+            if lookup:
+                secrets = [lookup]
+                reply = "AI 不读取密码库内容；已按查看请求生成本地复制命令。若条目存在，执行后会复制到剪贴板；若不存在，再选择保存新密码。"
+
         if reply:
             print("\n" + dim("AI ›"))
             print(dim(reply))
@@ -518,8 +550,10 @@ def main() -> int:
             print(dim("（无）"))
 
         if secrets:
-            print("\n" + warn("===== 机密提醒（不写入，需手动存 kdbx）====="))
-            print(warn("AI 不会保存、打印或写入密码内容；密码请勿粘贴进来，只显示条目提醒。"))
+            has_copy = any(s.get("action") == "copy" for s in secrets)
+            heading = "===== 机密操作（不读取明文）=====" if has_copy else "===== 机密提醒（不写入，需手动存 kdbx）====="
+            print("\n" + warn(heading))
+            print(warn("AI 不会读取、打印或写入密码内容；查看请求只调用本地命令，保存请求由你在终端输入密码。"))
             for i, s in enumerate(secrets, 1):
                 sid = str(s.get("identity") or identity)
                 title = str(s.get("title") or "")
