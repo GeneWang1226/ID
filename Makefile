@@ -6,7 +6,7 @@
 
 DB := data/id.db
 
-.PHONY: help new passwd pass pass-show pass-list pass-add pass-add-manual web web-stop web-logs db db-init show item event status backup
+.PHONY: help new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke web web-stop web-logs db db-init show item event status backup
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  make %-16s %s\n", $$1, $$2}'
@@ -51,6 +51,28 @@ pass-add-manual: ## 新增条目，手动输入密码（id=gene，缺省逐个�
 	uv="$(user)";  [ -n "$$uv" ]    || read -p "用户名(可空): " uv; \
 	test -n "$$iv" -a -n "$$tv" || { echo "错误: 身份和标题不能为空"; exit 1; }; \
 	keepassxc-cli add -p -u "$$uv" "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
+
+grant: ## 签发临时凭证给 AI 用（id=gene title="..." ttl=600，缺省逐个询问）
+	@iv="$(id)";    [ -n "$$iv" ] || read -p "身份: " iv; \
+	tv="$(title)"; [ -n "$$tv" ] || read -p "条目标题: " tv; \
+	test -n "$$iv" -a -n "$$tv" || { echo "错误: 身份和标题不能为空" >&2; exit 1; }; \
+	scripts/grant-secret.sh "$$iv" "$$tv" $(if $(ttl),--ttl $(ttl),)
+
+use: ## 用凭证代执行命令（token=... cmd='curl -u "u:$$ID_SECRET" url'；cmd 里用双引号、别用单引号，$ 写 $$）
+	@tv="$(token)"; [ -n "$$tv" ] || read -p "token: " tv; \
+	test -n "$$tv" || { echo "错误: token 不能为空" >&2; exit 1; }; \
+	cv='$(cmd)'; [ -n "$$cv" ] || read -p "命令: " cv; \
+	test -n "$$cv" || { echo "错误: 命令不能为空" >&2; exit 1; }; \
+	scripts/secret-exec.sh "$$tv" -- "$$cv"
+
+grants: ## 列出活跃临时凭证
+	@scripts/revoke-grant.sh --list
+
+revoke: ## 撤销凭证（token=... 或 all=1）
+	@if [ "$(all)" = "1" ]; then scripts/revoke-grant.sh --all; \
+	else tv="$(token)"; [ -n "$$tv" ] || read -p "token: " tv; \
+	test -n "$$tv" || { echo "错误: token 不能为空（或用 all=1）" >&2; exit 1; }; \
+	scripts/revoke-grant.sh "$$tv"; fi
 
 web: ## 构建并启动 Web 界面（http://localhost:3000）
 	docker compose up -d --build
