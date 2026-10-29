@@ -6,10 +6,13 @@
 
 DB := data/id.db
 
-.PHONY: help new passwd pass pass-show pass-list pass-add pass-add-manual web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help check new passwd pass pass-show pass-list pass-add pass-add-manual web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  make %-16s %s\n", $$1, $$2}'
+
+check: ## 安全自检（ignore 规则/追踪/权限/明文扫描），提交或同步前跑一遍
+	@scripts/security-check.sh
 
 new: ## 新增身份（id=gene）
 	@v="$(id)"; [ -n "$$v" ] || read -p "身份名: " v; \

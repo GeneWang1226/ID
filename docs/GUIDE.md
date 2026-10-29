@@ -6,6 +6,10 @@
 
 全部在 `~/ID` 下执行，输入 `make help` 可随时查看。参数统一用 `id=` 指身份；**任何参数都可以不给，缺的会逐个询问**——比如 `make pass-add id=gene` 会先问标题、用户名，再提示输主密码。
 
+> 提交代码或开启同步前，先跑 `make check` 自检：ignore 规则、git 追踪、权限、明文机密一次查完。
+
+> 提交代码或开启同步前，先跑 `make check` 自检：ignore 规则、git 追踪、权限、明文机密一次查完。
+
 | 命令 | 作用 |
 | --- | --- |
 | `make new id=gene` | 新增身份 |
@@ -21,6 +25,8 @@
 | `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
 | `make event id=gene` | 记事件（逐个询问标题/详情） |
 | `make ai` / `make ai file=资料.txt` | AI 整理一段资料，确认后写入（先在 `config` 填 `ai_api_key`） |
+| `make check` | 安全自检（提交/同步前必跑） |
+| `make check` | 安全自检（提交/同步前必跑） |
 | `make status` | 身份、条目数、Web 状态总览 |
 | `make backup` | 备份 SQLite 库到 `backups/` |
 
