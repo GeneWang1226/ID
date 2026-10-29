@@ -4,47 +4,49 @@
 
 ## 命令速查
 
-全部在 `~/ID` 下执行，输入 `make help` 可随时查看：
+全部在 `~/ID` 下执行，输入 `make help` 可随时查看。参数统一用 `id=` 指身份；**任何参数都可以不给，缺的会逐个询问**——比如 `make pass-add id=gene` 会先问标题、用户名，再提示输主密码。
 
 | 命令 | 作用 |
 | --- | --- |
-| `make new name=gene` | 新增身份 |
-| `make passwd name=gene` | 修改某身份 kdbx 主密码 |
-| `make pass name=gene title="..."` | 复制密码到剪贴板（10 秒后自动清空） |
-| `make pass-show name=gene title="..."` | 显示整条记录（无桌面/剪贴板时用） |
-| `make pass-add name=gene title="..." user="..."` | 新增条目并自动生成强密码 |
-| `make pass-add-manual name=gene title="..."` | 新增条目，手动输入密码 |
+| `make new id=gene` | 新增身份 |
+| `make passwd id=gene` | 修改某身份 kdbx 主密码 |
+| `make pass id=gene title="..."` | 复制密码到剪贴板（10 秒后自动清空） |
+| `make pass-show id=gene title="..."` | 显示整条记录（无桌面/剪贴板时用） |
+| `make pass-list id=gene` | 列出该身份 kdbx 里所有条目 |
+| `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
+| `make pass-add-manual id=gene` | 新增条目，手动输入密码 |
 | `make web` / `make web-stop` / `make web-logs` | 启停 Web 界面、看日志 |
-| `make show identity=gene` | 打印该身份的全部条目和事件 |
+| `make show id=gene` | 打印该身份的全部条目和事件 |
 | `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
-| `make item identity=gene cat=account key=proton-email value="gene@proton.me"` | 写/改条目 |
-| `make event identity=gene title="注册 Proton 邮箱"` | 记事件 |
+| `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
+| `make event id=gene` | 记事件（逐个询问标题/详情） |
 | `make status` | 身份、条目数、Web 状态总览 |
 | `make backup` | 备份 SQLite 库到 `backups/` |
+
+也支持全部参数一次给全（适合脚本或让 AI 代跑）：
+`make item id=gene cat=account key=proton-email value="gene@proton.me" note="主用邮箱"`
 
 ## 场景一：新增一个身份
 
 ```bash
-make new name=gene
+make new id=gene
 ```
 
 然后做三件事：
 
 1. 填 `identities/gene/profile.md`（档案与喜好）
-2. `make passwd name=gene` 把空白库改成该身份自己的主密码（第一条提示输 `config` 里的初始密码）
+2. `make passwd id=gene` 把空白库改成该身份自己的主密码（第一条提示输 `config` 里的初始密码）
 3. 有身份专属规则就补 `identities/gene/AGENTS.md`
 
-同一身份要开多个「分身」（多个手机号、多套银行卡）：`make new name=gene_2`，在 `profile.md` 写明用途。
+同一身份要开多个「分身」（多个手机号、多套银行卡）：`make new id=gene_2`，在 `profile.md` 写明用途。
 
 ## 场景二：刚注册了一个账号
 
 三步，密码和信息分开存：
 
-1. **密码 → kdbx（自己操作）**：`make pass-add name=gene title="Proton 邮箱" user="gene@proton.me"` 会自动生成 20 位强密码，把它填到注册页面；已有密码用 `make pass-add-manual`
-2. **账号信息 → SQLite（可让 AI 代劳）**：
-   `make item identity=gene cat=account key=proton-email value="gene@proton.me" note="主用邮箱"`
-3. **记一笔事件**：
-   `make event identity=gene title="注册 Proton 邮箱" detail="密码在 kdbx"`
+1. **密码 → kdbx（自己操作）**：`make pass-add id=gene`，按提示输标题和用户名，自动生成 20 位强密码，把它填到注册页面；已有密码用 `make pass-add-manual`
+2. **账号信息 → SQLite（可让 AI 代劳）**：`make item id=gene`，按提示逐项填
+3. **记一笔事件**：`make event id=gene`
 
 > 注意：`make item` / `make event` 的值里别用单引号，用双引号包整个值。
 
