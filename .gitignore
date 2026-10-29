@@ -25,3 +25,7 @@ Thumbs.db
 
 # Python 缓存
 __pycache__/
+
+# Node / Next.js 构建产物（package-lock.json 反而要入库，Docker 构建要 npm ci）
+node_modules/
+.next/
