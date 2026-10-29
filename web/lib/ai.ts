@@ -1,5 +1,5 @@
 // AI 配置与调用：与 scripts/ai-organize.py 同一套 OpenAI 兼容接口。
-// 配置优先取环境变量（docker compose 注入），其次读 ../.env（本地 next dev）。
+// API key 取环境变量/本机 secrets；非敏感设置从 config.toml 热加载。
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
@@ -14,7 +14,7 @@ export type AiDraft = {
 };
 
 function readEnvFile(): Record<string, string> {
-  const p = process.env.AI_ENV_PATH || join(process.cwd(), "..", ".env");
+  const p = process.env.AI_SECRETS_PATH || join(process.cwd(), "..", "config", "secrets", ".secrets.env");
   const cfg: Record<string, string> = {};
   if (!existsSync(p)) return cfg;
   for (const line of readFileSync(p, "utf-8").split("\n")) {
@@ -26,12 +26,48 @@ function readEnvFile(): Record<string, string> {
   return cfg;
 }
 
-export function aiConfig(): { apiKey: string; baseUrl: string; model: string } {
+function readTomlFile(): Record<string, string | boolean | number> {
+  const p = process.env.AI_CONFIG_PATH || join(process.cwd(), "..", "config", "config.toml");
+  if (!existsSync(p)) return {};
+  const values: Record<string, string | boolean | number> = {};
+  let section = "";
+  for (const raw of readFileSync(p, "utf-8").split("\n")) {
+    const line = raw.replace(/#.*/, "").trim();
+    if (!line) continue;
+    const header = line.match(/^\[([^\]]+)\]$/);
+    if (header) {
+      section = header[1];
+      continue;
+    }
+    if (section !== "ai") continue;
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+    if (!match) continue;
+    const value = match[2].trim();
+    if (/^".*"$/.test(value)) values[match[1]] = value.slice(1, -1);
+    else if (value === "true" || value === "false") values[match[1]] = value === "true";
+    else if (/^\d+$/.test(value)) values[match[1]] = Number(value);
+  }
+  return values;
+}
+
+export function aiConfig(): { apiKey: string; baseUrl: string; model: string; thinking: boolean; thinkingBudget: number } {
   const file = readEnvFile();
+  const legacy: Record<string, string> = process.env.AI_ENV_PATH ? {} : (() => {
+    const p = join(process.cwd(), "..", "docker", ".env");
+    if (!existsSync(p)) return {};
+    return readFileSync(p, "utf-8").split("\n").reduce<Record<string, string>>((out, line) => {
+      const i = line.indexOf("=");
+      if (i > 0 && line.slice(0, i).trim() === "ai_api_key") out.ai_api_key = line.slice(i + 1).trim();
+      return out;
+    }, {});
+  })();
+  const config = readTomlFile();
   return {
-    apiKey: process.env.AI_API_KEY || file.ai_api_key || "",
-    baseUrl: (process.env.AI_BASE_URL || file.ai_base_url || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/+$/, ""),
-    model: process.env.AI_MODEL || file.ai_model || "qwen-plus",
+    apiKey: process.env.AI_API_KEY || file.AI_API_KEY || legacy.ai_api_key || "",
+    baseUrl: (process.env.AI_BASE_URL || String(config.base_url || "https://dashscope.aliyuncs.com/compatible-mode/v1")).replace(/\/+$/, ""),
+    model: process.env.AI_MODEL || String(config.model || "qwen-plus"),
+    thinking: process.env.AI_THINKING === "1" || config.thinking === true,
+    thinkingBudget: Number(process.env.AI_THINKING_BUDGET || config.thinking_budget || 0),
   };
 }
 
@@ -77,8 +113,8 @@ function normalize(raw: Record<string, unknown>): AiDraft {
 }
 
 export async function aiChat(identity: string, history: ChatMessage[], text: string): Promise<AiDraft> {
-  const { apiKey, baseUrl, model } = aiConfig();
-  if (!apiKey) throw new Error("未配置 ai_api_key（在 ~/ID/.env 里填，或给容器传 AI_API_KEY）");
+  const { apiKey, baseUrl, model, thinking, thinkingBudget } = aiConfig();
+  if (!apiKey) throw new Error("未配置 AI_API_KEY（请运行 make settings，或填写 config/secrets/.secrets.env）");
 
   const messages = [
     { role: "system", content: SYSTEM_PROMPT.replace("__IDENTITY__", identity) },
@@ -93,7 +129,14 @@ export async function aiChat(identity: string, history: ChatMessage[], text: str
       method: "POST",
       signal: controller.signal,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, messages, response_format: { type: "json_object" }, temperature: 0.1 }),
+      body: JSON.stringify({
+        model,
+        messages,
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        enable_thinking: thinking,
+        ...(thinking && thinkingBudget > 0 ? { thinking_budget: thinkingBudget } : {}),
+      }),
     });
     if (!resp.ok) {
       throw new Error(`AI 接口返回 ${resp.status}: ${(await resp.text()).slice(0, 200)}`);

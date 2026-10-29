@@ -5,6 +5,7 @@
 #   make pass-add id=gene        询问标题、用户名，再提示输主密码
 
 DB := data/id.db
+COMPOSE := docker compose -f docker/docker-compose.yml $(if $(wildcard docker/.env),--env-file docker/.env,)
 
 # 颜色（仅终端输出时生效；管道/重定向自动无色）
 # 注意: $(shell) 的 stdout 被 make 捕获，所以要用 stderr 判断终端
@@ -19,7 +20,7 @@ PR := \033[36m
 N  := \033[0m
 endif
 
-.PHONY: help check new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help check settings new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@e=""; [ -t 1 ] && e=$$(printf '\033'); \
@@ -29,6 +30,9 @@ help: ## 显示本帮助
 
 check: ## 安全自检（ignore 规则/追踪/权限/明文扫描），提交或同步前跑一遍
 	@scripts/security-check.sh
+
+settings: ## 方向键修改 AI 设置，并可隐藏输入 API key
+	@scripts/settings.py
 
 new: ## 新增身份（id=gene）
 	@v="$(id)"; [ -n "$$v" ] || read -p "$$(printf '$(PR)身份名: $(N)')" v; \
@@ -101,14 +105,14 @@ tag: ## 给 kdbx 条目打/改/清标签（id=gene title="..." tags=ai-deny；ta
 	scripts/tag-entry.sh "$$iv" "$$tv" "$$gv"
 
 web: ## 构建并启动 Web 界面（http://localhost:3000）
-	docker compose up -d --build
+	@set -a; [ ! -f config/secrets/.secrets.env ] || . ./config/secrets/.secrets.env; set +a; $(COMPOSE) up -d --build
 	@printf '$(OK)Web 已启动: http://localhost:3000$(N)\n'
 
 web-stop: ## 停止 Web 界面
-	docker compose down
+	$(COMPOSE) down
 
 web-logs: ## 查看 Web 日志
-	docker compose logs -f web
+	$(COMPOSE) logs -f web
 
 # 表结构是幂等的（IF NOT EXISTS），每次读写前跑一遍确保库已初始化
 db-init:
@@ -144,7 +148,7 @@ event: db-init ## 记事件（id=gene，缺省逐个询问；值里别用单引�
 	sqlite3 $(DB) "INSERT INTO events(identity,title,detail) VALUES('$$iv','$$tv','$$dv');" && \
 	printf '$(OK)✓ 已记录: %s$(N)\n' "$$tv"
 
-ai: ## AI 整理资料（↑/↓选身份；空行提交；结果后可执行命令或继续提问；流式/思考由 .env 控制）
+ai: ## AI 整理资料（↑/↓选身份；空行提交；结果后可执行命令或继续提问；设置见 config/config.toml）
 	@iv="$(id)"; fv="$(file)"; \
 	[ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	[ -n "$$iv" ] || { printf '$(ER)错误: 身份不能为空$(N)\n' >&2; exit 1; }; \
@@ -154,7 +158,7 @@ ai: ## AI 整理资料（↑/↓选身份；空行提交；结果后可执行命
 status: db-init ## 总览：身份列表、各身份条目数、Web 运行状态
 	@printf '$(H)== 身份 ==$(N)\n'; ls identities/
 	@echo; printf '$(H)== 条目数 ==$(N)\n'; sqlite3 $(DB) "SELECT identity, COUNT(*) FROM items GROUP BY identity;"
-	@echo; printf '$(H)== Web ==$(N)\n'; docker compose ps 2>/dev/null || true
+	@echo; printf '$(H)== Web ==$(N)\n'; $(COMPOSE) ps 2>/dev/null || true
 
 backup: ## 备份 SQLite 库到 backups/
 	@mkdir -p backups

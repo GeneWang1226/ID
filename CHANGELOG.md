@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-（PR #3 合并 `dev` → `main` 后，可将本节清空或开新版本。）
+- **配置**：新增可同步的 `config/config.toml` 与 `make settings`；敏感配置迁移到本机 `config/secrets/.secrets.env`，Docker 配置集中在 `docker/`。
 
 ## [0.1.1] — 2026-10-29
 

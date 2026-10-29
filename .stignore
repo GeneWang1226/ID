@@ -1,7 +1,7 @@
 // Syncthing 文件夹设为 ~/ID。本文件放在同步根目录才会生效。
 // Syncthing 不会把 .stignore 本身同步到其他设备。
 //
-// 同步：identities/、.env、data/（SQLite 数据库）
+// 同步：identities/、data/（SQLite 数据库）；Docker 环境和 secrets 留在本机
 // 不同步：脚本、模板、文档、.git（这些留给 git）
 
 // git 仓库本体。同步它会在多端把仓库写坏。
@@ -13,12 +13,12 @@
 /assets
 /docs
 /web
+/docker
+/config
 /Makefile
-/docker-compose.yml
 /AGENTS.md
 /README.md
 /.gitignore
-/.env.example
 
 // 本机操作日志，两端同时写会冲突
 /logs

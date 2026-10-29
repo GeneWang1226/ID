@@ -7,13 +7,9 @@
   make ai                   # 方向键选择身份后再粘贴
   make ai id=jacob          # 直接指定身份
 
-配置写在 ~/ID/.env（权限 600，不进 git；模板见 .env.example）:
-  ai_api_key=sk-...
-  ai_base_url=https://dashscope.aliyuncs.com/compatible-mode/v1
-  ai_model=qwen-plus
-  ai_stream=0
-  ai_thinking=0
-  ai_thinking_budget=8192
+非敏感配置写在 ~/ID/config/config.toml（可同步）；敏感配置写在 ~/ID/config/secrets/.secrets.env（权限 600，不进 git）:
+  AI_API_KEY=sk-...
+  [ai] base_url / model / thinking / thinking_budget
 
 安全红线:
 - 只发非机密资料给云端 AI。密码、授权码、助记词绝不粘贴进来。
@@ -28,11 +24,14 @@ import shlex
 import sqlite3
 import subprocess
 import sys
+import tomllib
 import urllib.request
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG = BASE_DIR / ".env"
+CONFIG = BASE_DIR / "config" / "config.toml"
+SECRETS = BASE_DIR / "config" / "secrets" / ".secrets.env"
+LEGACY_ENV = BASE_DIR / "docker" / ".env"
 DB = BASE_DIR / "data" / "id.db"
 SCHEMA = BASE_DIR / "template" / "data" / "schema.sql"
 IDENTITIES_DIR = BASE_DIR / "identities"
@@ -123,14 +122,32 @@ def system_prompt(identity: str) -> str:
 
 def read_config() -> dict:
     cfg = {}
-    if not CONFIG.exists():
-        return cfg
-    for line in CONFIG.read_text().splitlines():
+    if CONFIG.exists():
+        with CONFIG.open("rb") as f:
+            ai = tomllib.load(f).get("ai", {})
+        for key in ("base_url", "model", "thinking", "thinking_budget"):
+            if key in ai:
+                cfg[f"ai_{key}"] = str(ai[key])
+
+    if SECRETS.exists():
+        lines = SECRETS.read_text().splitlines()
+    else:
+        lines = []
+    for line in lines:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
         cfg[k.strip()] = v.strip().strip('"').strip("'")
+
+    if "AI_API_KEY" not in cfg and os.environ.get("AI_API_KEY"):
+        cfg["AI_API_KEY"] = os.environ["AI_API_KEY"]
+    # 兼容旧安装：迁移到 config/secrets/.secrets.env 后可删除旧 docker/.env 中的 ai_api_key。
+    if "AI_API_KEY" not in cfg and LEGACY_ENV.exists():
+        for line in LEGACY_ENV.read_text().splitlines():
+            if line.strip().startswith("ai_api_key="):
+                cfg["AI_API_KEY"] = line.split("=", 1)[1].strip().strip('"').strip("'")
+                break
     return cfg
 
 
@@ -151,7 +168,6 @@ def call_ai(
     identity: str,
     text: str,
     history: list[dict] | None = None,
-    stream: bool = False,
     thinking: bool = False,
     thinking_budget: str = "",
 ) -> dict:
@@ -164,7 +180,6 @@ def call_ai(
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0.1,
-        "stream": stream,
         "enable_thinking": thinking,
     }
     if thinking and thinking_budget.strip():
@@ -182,45 +197,12 @@ def call_ai(
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
     )
     with urllib.request.urlopen(req, timeout=180) as resp:
-        if stream:
-            content_parts = []
-            reasoning_started = False
-            content_started = False
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload)
-                    delta = chunk["choices"][0].get("delta") or {}
-                except (ValueError, KeyError, IndexError, TypeError):
-                    continue
-                reasoning = delta.get("reasoning_content") or ""
-                piece = delta.get("content") or ""
-                if reasoning:
-                    if not reasoning_started:
-                        print(dim("\n思考 › "), end="", file=sys.stderr, flush=True)
-                        reasoning_started = True
-                    print(dim(str(reasoning)), end="", file=sys.stderr, flush=True)
-                if piece:
-                    if not content_started:
-                        print(dim("\n生成 › "), end="", file=sys.stderr, flush=True)
-                        content_started = True
-                    print(dim(str(piece)), end="", file=sys.stderr, flush=True)
-                    content_parts.append(str(piece))
-            if reasoning_started or content_started:
-                print(file=sys.stderr)
-            content = "".join(content_parts)
-        else:
-            data = json.loads(resp.read())
-            message = data["choices"][0]["message"]
-            reasoning = message.get("reasoning_content") or ""
-            if reasoning:
-                print(dim("\n思考 › " + str(reasoning)), file=sys.stderr)
-            content = message.get("content") or ""
+        data = json.loads(resp.read())
+    message = data["choices"][0]["message"]
+    reasoning = message.get("reasoning_content") or ""
+    if reasoning:
+        print(dim("\n思考 › " + str(reasoning)), file=sys.stderr)
+    content = message.get("content") or ""
     m = re.search(r"\{.*\}", content, re.S)
     if not m:
         raise ValueError(f"AI 没有返回 JSON: {content[:200]}")
@@ -423,14 +405,13 @@ def main() -> int:
             return 1
 
     cfg = read_config()
-    api_key = cfg.get("ai_api_key", "")
+    api_key = cfg.get("AI_API_KEY", "")
     base_url = cfg.get("ai_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     model = cfg.get("ai_model", "qwen-plus")
-    stream = config_bool(cfg, "ai_stream")
     thinking = config_bool(cfg, "ai_thinking")
     thinking_budget = cfg.get("ai_thinking_budget", "")
     if not api_key:
-        print(err("错误: .env 里还没有 ai_api_key。请填入后重试（模板见 .env.example）"), file=sys.stderr)
+        print(err("错误: config/secrets/.secrets.env 里还没有 AI_API_KEY。请复制 config/secrets/.secrets.env.example 后填写"), file=sys.stderr)
         return 1
 
     first_text = Path(args.file).read_text() if args.file else None
@@ -462,7 +443,6 @@ def main() -> int:
                 identity,
                 text,
                 history,
-                stream=stream,
                 thinking=thinking,
                 thinking_budget=thinking_budget,
             )

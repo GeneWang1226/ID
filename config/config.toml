@@ -1,0 +1,7 @@
+# 可同步的非敏感配置。make ai / Web 每次调用都会重新读取。
+
+[ai]
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "qwen3.8-max"
+thinking = false
+thinking_budget = 8192

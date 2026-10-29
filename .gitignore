@@ -11,6 +11,9 @@ identities/
 
 # 真实配置（初始密码、API key）。模板 .env.example 反而要入库
 .env
+.secrets.env
+docker/.env
+config/secrets/.secrets.env
 
 # 脚本操作日志
 logs/

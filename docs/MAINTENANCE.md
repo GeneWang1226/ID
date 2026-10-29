@@ -49,14 +49,14 @@ sudo apt install make
 ~/ID/scripts/add-identity.sh <身份名>
 ```
 
-脚本会自动：复制模板 → 权限设为 700 → 用 `.env` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
+脚本会自动：复制模板 → 权限设为 700 → 用 `config/secrets/.secrets.env` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
 
 ### 新建密码库的初始密码
 
-初始密码写在 `~/ID/.env`，键名 `kdbx_initial_password`，文件权限必须是 `600`（模板见 `.env.example`，新设备 `cp .env.example .env` 后填写）。改这个值只影响之后新建的库。
+初始密码写在 `~/ID/config/secrets/.secrets.env`，键名 `KDBX_INITIAL_PASSWORD`，文件权限必须是 `600`（模板见 `config/secrets/.secrets.env.example`，新设备复制后填写）。旧 `docker/.env` 中的 `kdbx_initial_password` 仍可兼容读取。改这个值只影响之后新建的库。
 
 ```bash
-chmod 600 ~/ID/.env
+chmod 600 ~/ID/config/secrets/.secrets.env
 ```
 
 ### ⚠️ 修改新密码库的主密码（必做）
@@ -67,7 +67,7 @@ chmod 600 ~/ID/.env
 keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 ```
 
-按提示先输入 `.env` 里的 `kdbx_initial_password`，再输两遍新密码。
+按提示先输入 `config/secrets/.secrets.env` 里的 `KDBX_INITIAL_PASSWORD`，再输两遍新密码。
 
 > `template/passwords/template.kdbx` 不再参与新建。脚本会当场 `db-create`。
 
@@ -91,19 +91,19 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 **启动 Web 界面：**
 
 ```bash
-docker compose up -d
+make web
 ```
 
-打开 http://localhost:3000，输入访问密码（在 `~/ID/.env` 的 `WEB_PASSWORD`，改后 `docker compose up -d` 生效）。
+打开 http://localhost:3000，输入访问密码（在 `~/ID/docker/.env` 的 `WEB_PASSWORD`，改后 `make web` 生效）。
 
-AI 助手页（`/ai`）用的 `ai_api_key` / `ai_base_url` / `ai_model` 也由 compose 从 `.env` 注入容器（容器内 nextjs 用户读不了 600 权限的文件，所以走环境变量而不是挂载）。改了 AI 配置同样 `docker compose up -d` 重建生效。
+AI 助手页（`/ai`）使用 `config/secrets/.secrets.env` 提供的 `AI_API_KEY` 和挂载的 `config/config.toml`。运行 `make settings` 修改非敏感设置后，Web 每次请求都会重新读取；API key 修改后运行 `make web` 重建容器。
 
 **手动查库：**
 
 ```bash
 sqlite3 ./data/id.db
 # 或
-docker compose exec web sqlite3 /app/data/id.db
+docker compose -f docker/docker-compose.yml --env-file docker/.env exec web sqlite3 /app/data/id.db
 ```
 
 常用 SQL 示例见 `template/data/schema.sql` 末尾注释。
@@ -118,7 +118,7 @@ docker compose exec web sqlite3 /app/data/id.db
 
 ## 同步与备份（待接入）
 
-- [ ] **Syncthing**：添加文件夹时选 `~/ID`，不要只选 `identities/`，否则根目录的 `.stignore` 不生效。同步出去的是 `identities/`、`.env` 和 `data/id.db`；脚本、模板、文档、`.git` 被忽略。`.stignore` 本身不会被同步，新设备要从 git 拿一份，或手动复制。`.env` 到另一台机器后确认权限仍是 `600`。kdbx 和 SQLite 库都可以同步，但**避免两端同时改同一个库**。**开启交错版本控制（staggered versioning）**。身份文件的历史靠它，不靠 git。
+- [ ] **Syncthing**：添加文件夹时选 `~/ID`，不要只选 `identities/`，否则根目录的 `.stignore` 不生效。同步出去的是 `identities/` 和 `data/id.db`；`config/config.toml` 通过 git 同步，Docker 环境和 `config/secrets/.secrets.env` 留在各机器本地。`.stignore` 本身不会被同步，新设备要从 git 拿一份，或手动复制。kdbx 和 SQLite 库都可以同步，但**避免两端同时改同一个库**。**开启交错版本控制（staggered versioning）**。身份文件的历史靠它，不靠 git。
 - [ ] **备份**：定期 `tar` 打包 + `gpg -c` 加密后存外部存储；SQLite 库直接复制 `./data/id.db` 或用 `sqlite3 ./data/id.db .dump > backup.sql` 导出。
 
 ## 故障排查

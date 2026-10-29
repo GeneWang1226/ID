@@ -6,10 +6,10 @@
 
 ```bash
 # 在项目根目录（~/ID）
-docker compose up -d
+make web
 ```
 
-打开 http://localhost:3000，输入访问密码（默认 `changeme`，可在 `docker-compose.yml` 或环境变量改）。
+打开 http://localhost:3000，输入访问密码（默认 `changeme`，可在 `docker/.env` 或环境变量改）。
 
 ## 数据库
 
@@ -29,6 +29,8 @@ npm run dev
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `WEB_PASSWORD` | `changeme` | 访问密码 |
+| `WEB_PASSWORD` | `changeme` | 访问密码（`docker/.env`） |
+| `AI_API_KEY` | 空 | AI API key（由 `make web` 从 `config/secrets/.secrets.env` 注入） |
+| `AI_CONFIG_PATH` | `/app/config.toml` | 非敏感 AI 配置文件（来自 `config/config.toml`） |
 | `DB_PATH` | `/app/data/id.db` | SQLite 文件路径（Docker 内） |
 | `SCHEMA_PATH` | `/app/template/data/schema.sql` | 表结构文件路径（Docker 内） |
