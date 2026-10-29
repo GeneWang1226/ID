@@ -44,11 +44,15 @@ passwd: ## 修改某身份 kdbx 主密码（id=gene）
 	[ -n "$$v" ] || { printf '$(ER)错误: 身份名不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli db-edit --set-password "identities/$$v/passwords/$$v.kdbx"
 
-pass: ## 复制密码到剪贴板，10 秒后自动清空（id=gene title="..."）
+pass: ## 复制密码到剪贴板，10 秒后自动清空（SSH 用 OSC 52；id=gene title="..."）
 	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	keepassxc-cli clip "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
+	if [ -n "$${SSH_CONNECTION:-}" ]; then \
+		scripts/pass-ssh.py "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
+	else \
+		keepassxc-cli clip "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
+	fi
 
 pass-show: ## 显示整条记录（id=gene title="..."）
 	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \

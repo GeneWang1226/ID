@@ -12,7 +12,7 @@
 | --- | --- |
 | `make new id=gene` | 新增身份 |
 | `make passwd id=gene` | 修改某身份 kdbx 主密码 |
-| `make pass id=gene title="..."` | 复制密码到剪贴板（10 秒后自动清空） |
+| `make pass id=gene title="..."` | 复制密码到剪贴板（10 秒后自动清空；SSH 会通过 OSC 52 写入本地终端） |
 | `make pass-show id=gene title="..."` | 显示整条记录（无桌面/剪贴板时用） |
 | `make pass-list id=gene` | 列出该身份 kdbx 里所有条目 |
 | `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
