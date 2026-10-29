@@ -49,14 +49,14 @@ sudo apt install make
 ~/ID/scripts/add-identity.sh <身份名>
 ```
 
-脚本会自动：复制模板 → 权限设为 700 → 用 `config` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
+脚本会自动：复制模板 → 权限设为 700 → 用 `.env` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
 
 ### 新建密码库的初始密码
 
-初始密码写在 `~/ID/config`，键名 `kdbx_initial_password`，文件权限必须是 `600`。改这个值只影响之后新建的库。
+初始密码写在 `~/ID/.env`，键名 `kdbx_initial_password`，文件权限必须是 `600`（模板见 `.env.example`，新设备 `cp .env.example .env` 后填写）。改这个值只影响之后新建的库。
 
 ```bash
-chmod 600 ~/ID/config
+chmod 600 ~/ID/.env
 ```
 
 ### ⚠️ 修改新密码库的主密码（必做）
@@ -67,7 +67,7 @@ chmod 600 ~/ID/config
 keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 ```
 
-按提示先输入 `config` 里的 `kdbx_initial_password`，再输两遍新密码。
+按提示先输入 `.env` 里的 `kdbx_initial_password`，再输两遍新密码。
 
 > `template/passwords/template.kdbx` 不再参与新建。脚本会当场 `db-create`。
 
@@ -107,7 +107,7 @@ docker compose exec web sqlite3 /app/data/id.db
 
 ## 同步与备份（待接入）
 
-- [ ] **Syncthing**：添加文件夹时选 `~/ID`，不要只选 `identities/`，否则根目录的 `.stignore` 不生效。同步出去的是 `identities/`、`config` 和 `data/id.db`；脚本、模板、文档、`.git` 被忽略。`.stignore` 本身不会被同步，新设备要从 git 拿一份，或手动复制。`config` 到另一台机器后确认权限仍是 `600`。kdbx 和 SQLite 库都可以同步，但**避免两端同时改同一个库**。**开启交错版本控制（staggered versioning）**。身份文件的历史靠它，不靠 git。
+- [ ] **Syncthing**：添加文件夹时选 `~/ID`，不要只选 `identities/`，否则根目录的 `.stignore` 不生效。同步出去的是 `identities/`、`.env` 和 `data/id.db`；脚本、模板、文档、`.git` 被忽略。`.stignore` 本身不会被同步，新设备要从 git 拿一份，或手动复制。`.env` 到另一台机器后确认权限仍是 `600`。kdbx 和 SQLite 库都可以同步，但**避免两端同时改同一个库**。**开启交错版本控制（staggered versioning）**。身份文件的历史靠它，不靠 git。
 - [ ] **备份**：定期 `tar` 打包 + `gpg -c` 加密后存外部存储；SQLite 库直接复制 `./data/id.db` 或用 `sqlite3 ./data/id.db .dump > backup.sql` 导出。
 
 ## 故障排查
