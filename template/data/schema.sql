@@ -23,6 +23,24 @@ CREATE TABLE IF NOT EXISTS events (
     detail      TEXT NOT NULL DEFAULT ''
 );
 
+-- AI 助手的对话（Web 界面 /ai 使用）。只存非机密内容；AI 识别到的机密只存标题提醒
+CREATE TABLE IF NOT EXISTS ai_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    identity   TEXT NOT NULL,               -- 本对话归属的身份
+    title      TEXT NOT NULL DEFAULT '',    -- 首条消息自动生成
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS ai_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES ai_sessions(id),
+    role       TEXT NOT NULL,               -- user / assistant
+    content    TEXT NOT NULL,               -- 展示内容（assistant 为自然语言回复）
+    draft_json TEXT,                        -- assistant 消息附带的草稿 {"items":[],"events":[],"secrets":[]}
+    status     TEXT NOT NULL DEFAULT '',    -- '' / applied / dismissed
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- 常用查询示例：
 --   查 gene 的全部账号:  SELECT key, value FROM items WHERE identity='gene' AND category='account';
 --   写入/更新:          INSERT INTO items(identity,category,key,value) VALUES('gene','account','github','myname')
