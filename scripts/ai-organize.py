@@ -5,7 +5,7 @@
   scripts/ai-organize.py <资料文件>
   或:  some-command | scripts/ai-organize.py
 
-配置写在 ~/ID/config（权限 600，不进 git）:
+配置写在 ~/ID/.env（权限 600，不进 git；模板见 .env.example）:
   ai_api_key=sk-...
   ai_base_url=https://dashscope.aliyuncs.com/compatible-mode/v1   # 可换成 Ollama: http://localhost:11434/v1
   ai_model=qwen-plus
@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG = BASE_DIR / "config"
+CONFIG = BASE_DIR / ".env"
 DB = BASE_DIR / "data" / "id.db"
 SCHEMA = BASE_DIR / "template" / "data" / "schema.sql"
 
@@ -107,7 +107,7 @@ def main() -> int:
     base_url = cfg.get("ai_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     model = cfg.get("ai_model", "qwen-plus")
     if not api_key:
-        print(c(31, "错误: config 里还没有 ai_api_key。请填入后重试（见脚本头部注释）"), file=sys.stderr)
+        print(c(31, "错误: .env 里还没有 ai_api_key。请填入后重试（模板见 .env.example）"), file=sys.stderr)
         return 1
 
     print(dim(f"==> 调用 {model} 整理中..."), file=sys.stderr)
