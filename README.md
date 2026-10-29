@@ -47,6 +47,24 @@
 
 `.stignore` 排除 git 那一侧和 `.git`，避免仓库被同步写坏。`.gitignore` 排除身份数据。新设备克隆私有远程部署项目；只开 Syncthing 的话，那边不会有 `scripts/` 和 `template/`。
 
+## keepassxc-cli 的局限（为什么打标签要绕道）
+
+`keepassxc-cli` 只是 KeePassXC 的附属工具，定位是查询和常见自动化，不少 GUI 功能没做进去：
+
+| 功能 | CLI | GUI |
+| --- | --- | --- |
+| 增删改条目、改主密码、生成密码、附件导入导出 | ✓ | ✓ |
+| 读写 Tags | 只能 `show` 读 | ✓ 可写 |
+| 自定义字段（TOTP 种子、额外属性） | 只能读 | ✓ 可写 |
+| 条目历史、回收站 | ✗ | ✓ |
+| Auto-Type 序列、浏览器集成配置 | ✗ | ✓ |
+| 自定义图标 | ✗ | ✓ |
+
+分级授权需要的 `ai-auto` / `ai-deny` 标签就是「只能读不能写」的那类。本项目的解法：
+
+- **服务器端**：`make tag id=<身份> title=<条目> tags=ai-deny`（[scripts/tag-entry.sh](scripts/tag-entry.sh)，原理是 `keepassxc-cli` 导出 XML → 注入标签 → 导入新库 → 验证后原子替换；临时 XML 只放 tmpfs 用完即删，主密码只经 stdin 传递）
+- **桌面端**：也可以在 KeePassXC 图形客户端里打，标签随 kdbx 经 Syncthing 同步
+
 ## 安全规则
 
 - 身份目录权限为 `700`，密钥类文件建议 `600`。

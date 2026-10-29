@@ -77,7 +77,7 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 
 - 凭证在 `${XDG_RUNTIME_DIR:-/run/user/<uid>}/id-grants/`，tmpfs，**重启即清空**；目录权限 700，文件 600
 - 过期凭证在每次 `grant` / `grants` 时顺手清理，无需定时任务
-- 条目的 `ai-auto` / `ai-deny` 标签只能在 KeePassXC 图形客户端打（`keepassxc-cli` 没有写 tag 的能力），标签随 kdbx 经 Syncthing 同步
+- 条目的 `ai-auto` / `ai-deny` 标签用 `make tag id=<身份> title=<条目> tags=<标签>` 打（`tags=` 留空则清除）；也可在 KeePassXC 图形客户端打，标签随 kdbx 经 Syncthing 同步。`tag-entry.sh` 通过 XML 导出/注入/导入实现，会重建数据库——条目和附件保留，但数据库级的自定义设置（如加密参数）如有改动需自行复查
 - 日志只记「何时授权/使用了哪个条目」，出现泄露疑虑时 `grep grant logs/scripts.log` 核对后 `make revoke all=1`
 
 ### 修改模板
@@ -95,6 +95,8 @@ docker compose up -d
 ```
 
 打开 http://localhost:3000，输入访问密码（在 `~/ID/.env` 的 `WEB_PASSWORD`，改后 `docker compose up -d` 生效）。
+
+AI 助手页（`/ai`）用的 `ai_api_key` / `ai_base_url` / `ai_model` 也由 compose 从 `.env` 注入容器（容器内 nextjs 用户读不了 600 权限的文件，所以走环境变量而不是挂载）。改了 AI 配置同样 `docker compose up -d` 重建生效。
 
 **手动查库：**
 

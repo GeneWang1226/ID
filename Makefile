@@ -19,7 +19,7 @@ PR := \033[36m
 N  := \033[0m
 endif
 
-.PHONY: help check new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help check new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@e=""; [ -t 1 ] && e=$$(printf '\033'); \
@@ -93,6 +93,13 @@ revoke: ## 撤销凭证（token=... 或 all=1）
 	[ -n "$$tv" ] || { printf '$(ER)错误: token 不能为空（或用 all=1）$(N)\n' >&2; exit 1; }; \
 	scripts/revoke-grant.sh "$$tv"; fi
 
+tag: ## 给 kdbx 条目打/改/清标签（id=gene title="..." tags=ai-deny；tags= 空则清除）
+	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
+	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
+	gv='$(tags)'; [ -n "$$gv" ] || read -p "$$(printf '$(PR)标签(多个用;分隔，直接回车清除): $(N)')" gv; \
+	scripts/tag-entry.sh "$$iv" "$$tv" "$$gv"
+
 web: ## 构建并启动 Web 界面（http://localhost:3000）
 	docker compose up -d --build
 	@printf '$(OK)Web 已启动: http://localhost:3000$(N)\n'
@@ -137,8 +144,15 @@ event: db-init ## 记事件（id=gene，缺省逐个询问；值里别用单引�
 	sqlite3 $(DB) "INSERT INTO events(identity,title,detail) VALUES('$$iv','$$tv','$$dv');" && \
 	printf '$(OK)✓ 已记录: %s$(N)\n' "$$tv"
 
-ai: ## AI 整理资料（make ai file=资料.txt 或直接粘贴后 Ctrl+D）
-	@scripts/ai-organize.py $(file)
+ai: ## AI 整理资料（id=gene file=资料.txt；缺 id 会先问身份，再粘贴 Ctrl+D）
+	@iv="$(id)"; fv="$(file)"; \
+	if [ -n "$$iv" ]; then \
+		if [ -n "$$fv" ]; then scripts/ai-organize.py --identity "$$iv" "$$fv"; \
+		else scripts/ai-organize.py --identity "$$iv"; fi; \
+	else \
+		if [ -n "$$fv" ]; then scripts/ai-organize.py "$$fv"; \
+		else scripts/ai-organize.py; fi; \
+	fi
 
 status: db-init ## 总览：身份列表、各身份条目数、Web 运行状态
 	@printf '$(H)== 身份 ==$(N)\n'; ls identities/

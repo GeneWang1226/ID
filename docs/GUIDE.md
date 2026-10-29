@@ -25,7 +25,7 @@
 | `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
 | `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
 | `make event id=gene` | 记事件（逐个询问标题/详情） |
-| `make ai` / `make ai file=资料.txt` | AI 整理一段资料，确认后写入（先在 `.env` 填 `ai_api_key`） |
+| `make ai id=jacob` / `make ai id=jacob file=资料.txt` | AI 整理资料（**先指定身份**；会展示模型 JSON 与草稿，确认后才写 SQLite；不写 kdbx，不涉及主密码） |
 | `make check` | 安全自检（提交/同步前必跑） |
 | `make status` | 身份、条目数、Web 状态总览 |
 | `make backup` | 备份 SQLite 库到 `backups/` |
@@ -67,6 +67,7 @@ make new id=gene
 ## 场景三：查看和修改信息
 
 - 不想敲命令：`make web` 后开 http://localhost:3000 （访问密码在 `.env` 的 `WEB_PASSWORD`）
+- **AI 助手**：Web 左侧「✦ AI 助手」进对话页——粘贴资料或附加文本文件，AI 整理成条目/事件草稿，**勾选确认后才写库**；机密只列提醒。对话和草稿都存库可回看，每条回复可展开「模型原始输出」。AI 配置用 `.env` 的 `ai_api_key` 等（docker compose 启动时注入容器）
 - 命令行：`make db` 进 SQLite 交互模式，查询示例见 `template/data/schema.sql` 末尾注释
 
 ## 场景四：让 AI 用密码干活（分级授权）
@@ -89,7 +90,7 @@ make use token=<token> cmd='curl -u "user:$$ID_SECRET" https://example.com'
 
 3. 随时 `make grants` 看活跃凭证，`make revoke token=...` 或 `make revoke all=1` 撤销。
 
-**分级**（给条目打 Tag，在 KeePassXC 图形客户端操作，服务器端只读）：
+**分级**（给条目打 Tag：`make tag id=jacob title="..." tags=ai-deny`，或在 KeePassXC 图形客户端打）：
 
 | Tag | 行为 | 适合 |
 | --- | --- | --- |
