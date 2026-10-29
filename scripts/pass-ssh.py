@@ -2,6 +2,7 @@
 """在 SSH 终端用 OSC 52 写入本地剪贴板，不把密码打印到终端。"""
 
 import base64
+import os
 import subprocess
 import sys
 import time
@@ -31,13 +32,21 @@ def main() -> int:
     if password.endswith(b"\r"):
         password = password[:-1]
     payload = base64.b64encode(password).decode("ascii")
-    sys.stdout.write(f"\033]52;c;{payload}\a")
+    write_clipboard(payload)
     sys.stdout.flush()
     print("已发送到本地终端剪贴板（OSC 52），10 秒后清空。", file=sys.stderr)
     time.sleep(10)
-    sys.stdout.write("\033]52;c;\a")
+    write_clipboard("")
     sys.stdout.flush()
     return 0
+
+
+def write_clipboard(payload: str) -> None:
+    sequence = f"\033]52;c;{payload}\a"
+    if os.environ.get("TMUX"):
+        # tmux 要求把 OSC 52 再包一层 DCS，并转义内层 ESC。
+        sequence = f"\033Ptmux;\033{sequence}\033\\"
+    sys.stdout.write(sequence)
 
 
 if __name__ == "__main__":
