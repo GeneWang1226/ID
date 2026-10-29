@@ -19,7 +19,7 @@ PR := \033[36m
 N  := \033[0m
 endif
 
-.PHONY: help check new passwd pass pass-show pass-list pass-add pass-add-manual web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help check new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@e=""; [ -t 1 ] && e=$$(printf '\033'); \
@@ -70,6 +70,28 @@ pass-add-manual: ## 新增条目，手动输入密码（id=gene，缺省逐个�
 	uv="$(user)";  [ -n "$$uv" ] || read -p "$$(printf '$(PR)用户名(可空): $(N)')" uv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli add -p -u "$$uv" "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
+
+grant: ## 签发临时凭证给 AI 用（id=gene title="..." ttl=600，缺省逐个询问）
+	@iv="$(id)";    [ -n "$$iv" ] || read -p "$$(printf '$(PR)身份: $(N)')" iv; \
+	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
+	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
+	scripts/grant-secret.sh "$$iv" "$$tv" $(if $(ttl),--ttl $(ttl),)
+
+use: ## 用凭证代执行命令（token=... cmd='curl -u "u:$$ID_SECRET" url'；cmd 里用双引号、别用单引号，$ 写 $$）
+	@tv="$(token)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)token: $(N)')" tv; \
+	[ -n "$$tv" ] || { printf '$(ER)错误: token 不能为空$(N)\n' >&2; exit 1; }; \
+	cv='$(cmd)'; [ -n "$$cv" ] || read -p "$$(printf '$(PR)命令: $(N)')" cv; \
+	[ -n "$$cv" ] || { printf '$(ER)错误: 命令不能为空$(N)\n' >&2; exit 1; }; \
+	scripts/secret-exec.sh "$$tv" -- "$$cv"
+
+grants: ## 列出活跃临时凭证
+	@scripts/revoke-grant.sh --list
+
+revoke: ## 撤销凭证（token=... 或 all=1）
+	@if [ "$(all)" = "1" ]; then scripts/revoke-grant.sh --all; \
+	else tv="$(token)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)token: $(N)')" tv; \
+	[ -n "$$tv" ] || { printf '$(ER)错误: token 不能为空（或用 all=1）$(N)\n' >&2; exit 1; }; \
+	scripts/revoke-grant.sh "$$tv"; fi
 
 web: ## 构建并启动 Web 界面（http://localhost:3000）
 	docker compose up -d --build
