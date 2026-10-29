@@ -107,7 +107,7 @@ def system_prompt(identity: str) -> str:
   "reply": "给用户看的简短说明（中文）：整理出了什么、或为什么没东西可写",
   "items": [{{"identity": "...", "category": "...", "key": "...", "value": "...", "note": "..."}}],
   "events": [{{"identity": "...", "title": "...", "detail": "..."}}],
-  "secrets": [{{"identity": "...", "title": "...", "kind": "密码/授权码/助记词/密钥"}}]
+  "secrets": [{{"identity": "...", "title": "...", "kind": "密码/授权码/助记词/密钥", "action": "copy/save"}}]
 }}
 
 规则：
@@ -116,7 +116,7 @@ def system_prompt(identity: str) -> str:
 - item 只有 category、key、value 都非空时才输出；只有“有一个账号/密码”但没有可保存内容时，不要生成空 value 占位条目
 - events 记录值得留痕的事（注册、导入、换绑），没有就给空数组
 - 资料过短或无法结构化（如单独一个数字）时，items/events/secrets 都为空，在 reply 里说明原因
-- **密码、授权码、恢复助记词、密钥绝不写进 items/events 的 value**，只在 secrets 里列出标题提醒用户手动存 kdbx
+- **密码、授权码、恢复助记词、密钥绝不写进 items/events 的 value**。用户要查看已有机密时，secrets.action 用 "copy"；用户要保存新机密时用 "save"。两者都只列标题，不要输出机密内容
 - 不确定的字段不要编造；无法填满必填字段时不要输出该条记录"""
 
 
@@ -254,6 +254,19 @@ def valid_rows(value: object, required: tuple[str, ...]) -> tuple[list[dict], in
         if isinstance(row, dict) and all(str(row.get(field) or "").strip() for field in required)
     ]
     return rows, len(value) - len(rows)
+
+
+def infer_secret_action(secret: dict, text: str) -> str:
+    """模型未给 action 时，按用户动词避免把查看误当成新增。"""
+    action = str(secret.get("action") or "").strip().lower()
+    if action in {"copy", "view", "show", "retrieve", "use"}:
+        return "copy"
+    if action in {"save", "add", "store", "create", "set"}:
+        return "save"
+    lower = text.lower()
+    wants_copy = any(word in lower for word in ("查看", "看看", "显示", "复制", "取出", "拿到", "使用", "view", "show", "copy", "retrieve"))
+    wants_save = any(word in lower for word in ("保存", "存入", "存", "录入", "新增", "添加", "设置", "save", "add", "store", "create"))
+    return "copy" if wants_copy and not wants_save else "save"
 
 
 def launch_secret_entries(secrets: list[dict]) -> list[dict]:
@@ -472,6 +485,7 @@ def main() -> int:
             normalize_identity(ev, identity)
         for s in secrets:
             normalize_identity(s, identity)
+            s["action"] = infer_secret_action(s, text)
 
         if reply:
             print("\n" + dim("AI ›"))
@@ -510,10 +524,17 @@ def main() -> int:
                 sid = str(s.get("identity") or identity)
                 title = str(s.get("title") or "")
                 kind = str(s.get("kind") or "")
+                action = str(s.get("action") or "save")
+                if action == "copy":
+                    command = f"make pass id={shlex.quote(sid)} title={shlex.quote(title)}"
+                    suffix = "（复制已有条目到剪贴板）"
+                else:
+                    command = f"make pass-add-manual id={shlex.quote(sid)} title={shlex.quote(title)}"
+                    suffix = "（新增条目并手动录入）"
                 print(
                     warn(
-                        f"{i}. [{sid}] {title}（{kind}）"
-                        f"→ make pass-add-manual id={shlex.quote(sid)} title={shlex.quote(title)}"
+                        f"{i}. [{sid}] {title}（{kind}）{suffix}"
+                        f"\n   → {command}"
                     )
                 )
 
@@ -531,14 +552,18 @@ def main() -> int:
             return 1
 
         options = []
-        if secrets:
-            options.append(("secrets", "执行预设密码录入命令"))
+        save_secrets = [s for s in secrets if s.get("action") == "save"]
+        copy_secrets = [s for s in secrets if s.get("action") == "copy"]
+        if save_secrets:
+            options.append(("secrets-save", "新增并录入密码"))
+        if copy_secrets:
+            options.append(("secrets-copy", "复制已有密码到剪贴板"))
         if items or events:
             options.append(("write", f"确认写入 SQLite（身份 {identity}）"))
         options.extend([("continue", "继续向 AI 提问"), ("exit", "退出" )])
         action = choose_action(options)
-        if action == "secrets":
-            added = launch_secret_entries(secrets)
+        if action == "secrets-save":
+            added = launch_secret_entries(save_secrets)
             if added:
                 copy_action = choose_action(
                     [
@@ -548,6 +573,9 @@ def main() -> int:
                 )
                 if copy_action == "copy":
                     copy_secret_entries(added)
+            continue
+        if action == "secrets-copy":
+            copy_secret_entries(copy_secrets)
             continue
         if action == "write":
             write_draft(items, events)

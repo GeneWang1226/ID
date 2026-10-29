@@ -60,7 +60,7 @@ make new id=gene
 
 ### 用 AI 整理（`make ai`）
 
-先运行 `make settings` 设置模型、接口地址、思考模式和 API key。非敏感设置写入可同步的 `config/config.toml`，API key 写入权限为 600 的 `config/secrets/.secrets.env`。然后运行 `make ai`，用方向键选择身份，粘贴杂乱资料并输入空行提交；也可以用 `make ai id=gene file=资料.txt`。AI 会先打印 `AI ›` 回复和条目/事件草稿，**确认后才写库**；识别到机密时会给出带预填标题的 `make pass-add-manual` 命令，按回车可直接进入密码录入，密码内容仍由你在终端输入。
+先运行 `make settings` 设置模型、接口地址、思考模式和 API key。非敏感设置写入可同步的 `config/config.toml`，API key 写入权限为 600 的 `config/secrets/.secrets.env`。然后运行 `make ai`，用方向键选择身份，粘贴杂乱资料并输入空行提交；也可以用 `make ai id=gene file=资料.txt`。AI 会先打印 `AI ›` 回复和条目/事件草稿，**确认后才写库**；要保存新机密时会给出带预填标题的 `make pass-add-manual` 命令，按回车可直接进入密码录入；要查看已有机密时会给出 `make pass` 命令，将密码复制到剪贴板。密码内容仍由你在终端输入或粘贴。
 
 新设备先执行 `cp config/secrets/.secrets.env.example config/secrets/.secrets.env && chmod 600 config/secrets/.secrets.env`，再运行 `make settings` 输入 API key。旧 `docker/.env` 中的 `ai_api_key` 和 `kdbx_initial_password` 迁移到 `config/secrets/.secrets.env` 后即可删除旧值；兼容读取只用于过渡。
 
