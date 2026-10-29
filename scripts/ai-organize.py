@@ -257,7 +257,7 @@ def valid_rows(value: object, required: tuple[str, ...]) -> tuple[list[dict], in
 
 
 COPY_WORDS = ("查看", "看看", "看", "显示", "复制", "取出", "拿到", "使用", "查一下", "view", "show", "copy", "retrieve")
-SAVE_WORDS = ("保存", "存入", "存", "录入", "新增", "添加", "设置", "save", "add", "store", "create")
+SAVE_WORDS = ("保存", "存入", "存", "录入", "新增", "添加", "设置", "重置", "重设", "更新", "修改", "save", "add", "store", "create", "reset", "update")
 SECRET_WORDS = ("密码", "授权码", "助记词", "密钥", "password", "passwd", "passcode", "token", "secret")
 
 
@@ -274,14 +274,7 @@ def infer_secret_action(secret: dict, text: str) -> str:
     return "copy" if wants_copy and not wants_save else "save"
 
 
-def infer_lookup_secret(text: str, identity: str) -> dict | None:
-    """查看请求没有被模型列出时，生成不含密码内容的本地复制提示。"""
-    lower = text.lower()
-    if not any(word in lower for word in COPY_WORDS):
-        return None
-    if any(word in lower for word in SAVE_WORDS) or not any(word in lower for word in SECRET_WORDS):
-        return None
-
+def infer_secret_title(text: str) -> str:
     compact = re.sub(r"\s+", "", text)
     match = re.search(r"([\u4e00-\u9fffA-Za-z0-9_.-]+?)(?:账号|账户)?密码", compact, re.I)
     english_match = re.search(r"([A-Za-z0-9_.-]+)\s*(?:password|passwd|passcode)", text, re.I)
@@ -289,10 +282,39 @@ def infer_lookup_secret(text: str, identity: str) -> dict | None:
         match = english_match
     title = "密码"
     if match:
-        prefix = re.sub(r"^(?:(?:看看|查看|看|显示|帮我|帮忙|请|我的|我|这个|该|my|the))+", "", match.group(1), flags=re.I)
+        prefix = re.sub(
+            r"^(?:(?:重新设置|重置|重设|更新|修改|保存|存入|录入|新增|添加|设置|给我的|给我|给|看看|查看|看|显示|帮我|帮忙|请|我的|我|这个|该|my|the))+",
+            "",
+            match.group(1),
+            flags=re.I,
+        )
+        prefix = re.sub(
+            r"(?:(?:账号|账户)?(?:保存|存入|录入|新增|添加|设置|修改|重置|重设|更新))$|(?:账号|账户)$",
+            "",
+            prefix,
+            flags=re.I,
+        )
         if prefix:
             title = f"{prefix}密码"
-    return {"identity": identity, "title": title, "kind": "密码", "action": "copy"}
+    return title
+
+
+def infer_lookup_secret(text: str, identity: str) -> dict | None:
+    """查看请求没有被模型列出时，生成不含密码内容的本地复制提示。"""
+    lower = text.lower()
+    if not any(word in lower for word in COPY_WORDS):
+        return None
+    if any(word in lower for word in SAVE_WORDS) or not any(word in lower for word in SECRET_WORDS):
+        return None
+    return {"identity": identity, "title": infer_secret_title(text), "kind": "密码", "action": "copy"}
+
+
+def infer_save_secret(text: str, identity: str) -> dict | None:
+    """保存/重置请求没有给出密码内容时，生成预填标题的录入提示。"""
+    lower = text.lower()
+    if not any(word in lower for word in SAVE_WORDS) or not any(word in lower for word in SECRET_WORDS):
+        return None
+    return {"identity": identity, "title": infer_secret_title(text), "kind": "密码", "action": "save"}
 
 
 def launch_secret_entries(secrets: list[dict]) -> list[dict]:
@@ -317,7 +339,8 @@ def launch_secret_entries(secrets: list[dict]) -> list[dict]:
     return added
 
 
-def copy_secret_entries(secrets: list[dict]) -> None:
+def copy_secret_entries(secrets: list[dict]) -> list[dict]:
+    failed = []
     for secret in secrets:
         identity = str(secret.get("identity") or "")
         title = str(secret.get("title") or "")
@@ -329,6 +352,15 @@ def copy_secret_entries(secrets: list[dict]) -> None:
         )
         if result.returncode:
             print(warn(f"密码复制已结束（退出码 {result.returncode}）。"), file=sys.stderr)
+            print(
+                warn(
+                    f"未找到条目 {title!r}；可先运行 make pass-list id={shlex.quote(identity)} 查看标题，"
+                    f"或执行 make pass-add-manual id={shlex.quote(identity)} title={shlex.quote(title)} 新增。"
+                ),
+                file=sys.stderr,
+            )
+            failed.append(secret)
+    return failed
 
 
 def choose_action(options: list[tuple[str, str]]) -> str:
@@ -515,9 +547,13 @@ def main() -> int:
 
         if not secrets:
             lookup = infer_lookup_secret(text, identity)
+            save = infer_save_secret(text, identity)
             if lookup:
                 secrets = [lookup]
                 reply = "AI 不读取密码库内容；已按查看请求生成本地复制命令。若条目存在，执行后会复制到剪贴板；若不存在，再选择保存新密码。"
+            elif save:
+                secrets = [save]
+                reply = "AI 不读取或保存密码明文；已按保存请求生成预填标题的本地录入命令，请在终端输入新密码。"
 
         if reply:
             print("\n" + dim("AI ›"))
