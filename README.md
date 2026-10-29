@@ -4,6 +4,7 @@
 
 - **日常使用：[docs/GUIDE.md — 操作指引](docs/GUIDE.md)**
 - 安装、维护、故障排查：[docs/MAINTENANCE.md — 维护手册](docs/MAINTENANCE.md)
+- 版本变更：[CHANGELOG.md](CHANGELOG.md)
 
 ## 目录结构
 
