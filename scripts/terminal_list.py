@@ -38,6 +38,43 @@ def clip(text: str, limit: int) -> str:
     return result + "…" if limit > 0 else ""
 
 
+def wrap(text, limit):
+    text = "".join(c if c == "\n" or c.isprintable() else " " for c in str(text))
+    lines = []
+    for paragraph in text.split("\n"):
+        line, used = "", 0
+        for char in paragraph:
+            size = width(char)
+            if line and used + size > limit:
+                lines.append(line)
+                line, used = "", 0
+            line += char
+            used += size
+        lines.append(line)
+    return lines
+
+
+def record_key(row):
+    return row["kind"], row.get("id", row.get("title", (row.get("category"), row.get("key"))))
+
+
+def detail_lines(row, columns):
+    fields = row.get("details", [("名称", row.get("title") or row.get("name") or row.get("key", ""), "37"),
+                                  ("备注", row.get("remark") or "—", "37")])
+    lines = [color("    ┌ 详情", "2")]
+    for label, value, style in fields:
+        label = "".join(c if c.isprintable() else " " for c in str(label))
+        if width(label) > 8:
+            lines += [color("    " + part, "2") for part in wrap(label, columns - 4)]
+            label = "│"
+        prefix = "    " + label
+        prefix += " " * (14 - width(prefix))
+        for index, part in enumerate(wrap(value or "—", columns - 14)):
+            lines.append(color(prefix if index == 0 else "    │" + " " * 9, "2") + color(part, style))
+    lines.append(color("    └", "2"))
+    return lines
+
+
 def color(text: str, style: str) -> str:
     if sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb":
         return f"\033[{style}m{text}\033[0m"
@@ -55,7 +92,7 @@ def read_key(fd: int) -> str:
             if key[-1:] in (b"A", b"B", b"C", b"D", b"~"):
                 break
     return {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "next", b"\x1b[D": "prev",
-            b"\x1b[5~": "prev", b"\x1b[6~": "next", b"\r": "enter", b"\n": "enter",
+            b"\x1b[5~": "page_up", b"\x1b[6~": "page_down", b"\x1b[3~": "delete", b"\r": "enter", b"\n": "enter",
             b"\x03": "q", b"\x1b": "q"}.get(key, key.decode("ascii", errors="ignore"))
 
 
@@ -82,6 +119,14 @@ class RecordBrowser:
         self.picker = picker
         self.category = category
         self.page = self.selected = 0
+        self.expanded = None
+        self.offset = 0
+        self.follow = True
+
+    def collapse(self):
+        self.expanded = None
+        self.offset = 0
+        self.follow = True
 
     def render(self, records, columns, height):
         if columns < 30 or height < 12:
@@ -101,14 +146,17 @@ class RecordBrowser:
         self.page = min(self.page, pages - 1)
         current = batches[self.page]
         self.selected = min(self.selected, max(0, len(current) - 1))
+        if self.expanded is not None and not any(record_key(row) == self.expanded for row in current):
+            self.collapse()
         lines = [color(clip(f"ID  /  {self.identity}", columns), "1;36"), ""]
         lines.append(color("选择维度" if self.view == "dimension" else "选择密码条目", "1;36") if self.picker else
                      "   ".join(color(label, "1;36" if key == self.view else "2") for key, label in VIEWS))
         lines.append("")
-        index = 0
+        index, selected_line = 0, 0
+        body = []
         for (kind, category), group in groupby(current, key=section):
             label = "个人信息 / " + category_label(category) if kind == "info" else dict(VIEWS).get(kind, "维度")
-            lines.append(color(clip(label, columns), "1"))
+            body.append(color(clip(label, columns), "1"))
             available = max(20, columns - 2)
             if kind == "password":
                 widths = [max(6, available - 26), 10, 12] if columns >= 50 and not self.picker else [available - 12, 10]
@@ -137,15 +185,18 @@ class RecordBrowser:
 
             def row_line(values, selected=False, status=""):
                 cells = [clip(value, size) for value, size in zip(values, widths)]
-                plain = "  ".join(value + " " * (size - width(value)) for value, size in zip(cells, widths)).rstrip()
+                cells = [value + " " * (size - width(value)) for value, size in zip(cells, widths)]
+                plain = "  ".join(cells).rstrip()
                 prefix = "› " if selected else "  "
                 if selected:
                     return color(prefix + plain, "1;36")
                 if status:
-                    return prefix + plain.replace(status, color(status, "32" if status == "已设置" else "33"), 1)
+                    index = 2 if kind == "account" and columns >= 60 else 1
+                    cells[index] = color(cells[index], "32" if status == "已设置" else "33")
+                    plain = "  ".join(cells).rstrip()
                 return prefix + plain
 
-            lines.append(color(row_line(headers), "2"))
+            body.append(color(row_line(headers), "2"))
             for row in group:
                 if kind == "password":
                     cells = [row["title"], row["status"], str(row.get("linked", 0))]
@@ -157,16 +208,40 @@ class RecordBrowser:
                     cells = [row["label"], str(row["count"])]
                 else:
                     cells = [row["key"], row["value"] or "—", row.get("remark") or "—"]
-                lines.append(row_line(cells, index == self.selected, row.get("status", "")))
+                if index == self.selected:
+                    selected_line = len(body)
+                body.append(row_line(cells, index == self.selected, row.get("status", "")))
+                if not self.picker and record_key(row) == self.expanded:
+                    body += detail_lines(row, columns)
                 index += 1
-            lines.append("")
+            body.append("")
         if not records:
-            lines.append(color("  暂无记录", "2"))
-        lines += [color(f"第 {self.page + 1}/{pages} 页  ·  {len(records)} 条", "2"),
-                  color(clip("↑↓ 选择  ←→/PgUp/PgDn 翻页  Enter " + ("确认" if self.picker else "详情/操作"), columns), "2")]
+            body.append(color("  暂无记录", "2"))
+        body_height = height - 8
+        if self.follow:
+            if self.expanded is not None:
+                self.offset = max(0, selected_line - 2)
+            elif selected_line < self.offset or selected_line >= self.offset + body_height:
+                self.offset = max(0, selected_line - body_height + 1)
+            self.follow = False
+        self.offset = max(0, min(self.offset, len(body) - body_height))
+        lines += body[self.offset:self.offset + body_height]
+        position = f"第 {self.page + 1}/{pages} 页  ·  {len(records)} 条"
+        if self.expanded is not None and len(body) > body_height:
+            position += f"  ·  展开 {self.offset + 1}–{min(len(body), self.offset + body_height)}/{len(body)} 行"
+        keys = "PgUp/PgDn 滚动  Enter 收起" if self.expanded else "↑↓ 选择  ←→/PgUp/PgDn 翻页  Enter " + ("确认" if self.picker else "展开")
+        lines += [color(clip(position, columns), "2"), color(clip(keys, columns), "2")]
         if not self.picker:
             shortcuts = "1 全部  2 账号  3 密码  4 信息  d 维度  r 刷新  q 退出" if columns >= 90 else "1全 2号 3密 4信 d类 r刷 q退"
-            lines.append(color(clip(shortcuts, columns), "2"))
+            if self.expanded is not None:
+                password = current[self.selected]["kind"] == "password"
+                actions = "o 操作  e 修改密码  " if password else "o 操作  e 编辑备注  f 删除字段  "
+                if columns < 60:
+                    actions = "o操作 e修改 " if password else "o操作 e备注 f删项 "
+                lines.append(color(actions, "2") + color("x 删整条", "31") + color("  q 退出", "2") if columns >= 60 else
+                             color(actions, "2") + color("x删条", "31") + color(" q退", "2"))
+            else:
+                lines.append(color(clip(shortcuts, columns), "2"))
             if self.category and self.view in ("all", "info"):
                 lines[3] = color(clip("维度：" + category_label(self.category) + "（d 更换）", columns), "2")
         else:
@@ -185,7 +260,25 @@ class RecordBrowser:
                 if key in ("q", "Q", ""):
                     return None
                 if key == "enter" and current:
-                    return current[self.selected]
+                    if self.picker:
+                        return current[self.selected]
+                    selected = record_key(current[self.selected])
+                    self.expanded = None if self.expanded == selected else selected
+                    self.offset, self.follow = 0, True
+                    continue
+                if not self.picker and self.expanded is not None and current:
+                    row = current[self.selected]
+                    if key == "o":
+                        return row
+                    action = {"x": "delete", "delete": "delete", "f": "field", "e": "edit" if row["kind"] == "password" else "note"}.get(key)
+                    if action and not (action == "field" and row["kind"] == "password"):
+                        return {**row, "_action": action}
+                if key in ("page_down", "page_up") and self.expanded is not None:
+                    self.offset += (1 if key == "page_down" else -1) * max(1, size.lines - 10)
+                    continue
+                key = {"page_down": "next", "page_up": "prev"}.get(key, key)
+                if key in ("next", "n", "prev", "p", "down", "j", "up", "k"):
+                    self.collapse()
                 if key in ("next", "n"):
                     self.page, self.selected = min(self.page + 1, pages - 1), 0
                 elif key in ("prev", "p"):
@@ -203,6 +296,7 @@ class RecordBrowser:
                 elif not self.picker and key in ("1", "2", "3", "4"):
                     self.view = VIEWS[int(key) - 1][0]
                     self.page = self.selected = 0
+                    self.collapse()
                     return {"kind": "filter"}
                 elif key == "d" and not self.picker:
                     return {"kind": "dimension"}

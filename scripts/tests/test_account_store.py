@@ -477,6 +477,115 @@ class AccountStoreTests(unittest.TestCase):
         self.assertIsNone(store.info_rows("alice")[0]["link"])
         self.assertEqual(self.account(), before)
 
+    def test_delete_record_removes_its_link_and_preserves_other_identity(self):
+        self.import_accounts({"待确认": "bob"})
+        own, other = store.info_rows("alice")[0], store.info_rows("bob")[0]
+        store.set_password_link("alice", own["id"], "Mail")
+        store.set_password_link("bob", other["id"], "Mail")
+        with self.assertRaises(store.AccountError):
+            store.delete_item("alice", other["id"])
+        store.delete_item("alice", own["id"])
+        self.assertEqual(store.info_rows("alice"), [])
+        self.assertEqual(store.info_rows("bob")[0]["link"], "Mail")
+        with contextlib.closing(sqlite3.connect(self.root / "data" / "id.db")) as db:
+            self.assertFalse(db.execute("SELECT 1 FROM password_links WHERE item_id=?", (own["id"],)).fetchone())
+            self.assertTrue(db.execute("SELECT 1 FROM events WHERE identity='alice' AND title='删除资料记录'").fetchone())
+
+    def test_delete_field_keeps_source_metadata_and_required_fields(self):
+        self.import_accounts({"待确认": "bob"})
+        own, other = store.info_rows("alice")[0], store.info_rows("bob")[0]
+        metadata = json.loads(own["note"])
+        store.set_password_link("alice", own["id"], "Mail")
+        for identity, item_id, field in (("alice", other["id"], "meta:purpose"),
+                                         ("alice", own["id"], "meta:source"), ("alice", own["id"], "value")):
+            with self.assertRaises(store.AccountError):
+                store.delete_field(identity, item_id, field)
+        store.delete_field("alice", own["id"], "meta:purpose")
+        row = store.info_rows("alice")[0]
+        del metadata["purpose"]
+        self.assertEqual(json.loads(row["note"]), metadata)
+        self.assertEqual(row["value"], own["value"])
+        self.assertEqual(row["link"], "Mail")
+        store.delete_field("alice", own["id"], "link")
+        self.assertIsNone(store.info_rows("alice")[0]["link"])
+        item_id = self.add_item("work", "职位", "工程师", "完整备注")
+        store.delete_field("alice", item_id, "note")
+        self.assertEqual(next(r for r in store.info_rows("alice") if r["id"] == item_id)["note"], "")
+
+    def test_delete_menu_defaults_to_cancel_and_only_deletes_after_confirmation(self):
+        self.import_accounts()
+        row = {**store.info_rows("alice")[0], "_action": "delete"}
+        with (patch.object(store.RecordBrowser, "choose", side_effect=[row, None]),
+              patch.object(store, "choose_action", return_value="exit") as choose,
+              patch.object(store, "delete_item") as delete, contextlib.redirect_stdout(Terminal())):
+            store.list_records("alice", "info")
+        delete.assert_not_called()
+        self.assertEqual(choose.call_args.args[0][0][0], "exit")
+        with (patch.object(store.RecordBrowser, "choose", side_effect=[row, None]),
+              patch.object(store, "choose_action", return_value="delete"), contextlib.redirect_stdout(Terminal())):
+            store.list_records("alice", "info")
+        self.assertEqual(store.info_rows("alice"), [])
+
+    def test_cancel_password_deletion_does_not_unlock_or_change_vault(self):
+        row = dict(kind="password", title="GitHub", status="已设置", _action="delete")
+        with (patch.object(store.RecordBrowser, "choose", side_effect=[row, None]),
+              patch.object(store, "choose_action", return_value="exit"),
+              patch.object(store, "delete_password") as delete, contextlib.redirect_stdout(Terminal())):
+            store.list_passwords("alice")
+        delete.assert_not_called()
+
+    def test_delete_password_reauthenticates_backs_up_and_unlinks_only_current_identity(self):
+        self.import_accounts({"待确认": "bob"})
+        own, other = store.info_rows("alice")[0], store.info_rows("bob")[0]
+        store.set_password_link("alice", own["id"], "GitHub")
+        store.set_password_link("bob", other["id"], "GitHub")
+        results = [SimpleNamespace(returncode=0, stdout="GitHub\n"), SimpleNamespace(returncode=0),
+                   SimpleNamespace(returncode=0, stdout="Recycle Bin/GitHub\n"), SimpleNamespace(returncode=0)]
+        with (store.vault_session.session() as session, patch.object(session, "unlock") as unlock,
+              patch.object(store.vault_session, "run_cli", side_effect=results) as run, contextlib.redirect_stdout(Terminal())):
+            store.delete_password("alice", "GitHub")
+        unlock.assert_called_once_with(store.vault_for("alice"), fresh=True)
+        self.assertEqual([call.args[0][1] for call in run.call_args_list], ["ls", "rm", "ls", "rm"])
+        self.assertEqual(run.call_args.args[0][-1], "Recycle Bin/GitHub")
+        self.assertIsNone(store.info_rows("alice")[0]["link"])
+        self.assertEqual(store.info_rows("bob")[0]["link"], "GitHub")
+        backups = list((self.root / "backups/password-deletions/alice").glob("*.kdbx"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
+
+    def test_delete_password_stops_when_recycled_path_is_ambiguous(self):
+        results = [SimpleNamespace(returncode=0, stdout="GitHub\nRecycle Bin/GitHub\n"), SimpleNamespace(returncode=0),
+                   SimpleNamespace(returncode=0, stdout="Recycle Bin/GitHub\nRecycle Bin/GitHub\n")]
+        with (store.vault_session.session() as session, patch.object(session, "unlock"),
+              patch.object(store.vault_session, "run_cli", side_effect=results) as run):
+            with self.assertRaises(store.AccountError):
+                store.delete_password("alice", "GitHub")
+        self.assertEqual(run.call_count, 3)
+        self.assertTrue(list((self.root / "backups/password-deletions/alice").glob("*.kdbx")))
+
+    def test_password_backup_cannot_follow_a_link_outside_backup_directory(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.root / "backups").symlink_to(outside, target_is_directory=True)
+        with (store.vault_session.session() as session, patch.object(session, "unlock"),
+              patch.object(store.vault_session, "run_cli", return_value=SimpleNamespace(returncode=0, stdout="GitHub\n")) as run):
+            with self.assertRaises(store.AccountError):
+                store.delete_password("alice", "GitHub")
+        run.assert_called_once()
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_inline_details_include_full_notes_and_hide_import_internals(self):
+        self.import_accounts()
+        row = store.account_rows("alice")[0]
+        row["note"] = row["raw_note"]
+        row["status"] = "未关联"
+        row["note"] = json.dumps({**json.loads(row["raw_note"]),
+                                  "purpose": "完整备注\n第二行"}, ensure_ascii=False)
+        details = store.record_details(row, [])
+        self.assertIn(("备注", "完整备注\n第二行", "37"), details)
+        self.assertNotIn("source_row", str(details))
+        self.assertNotIn("backups/", str(details))
+
     def test_link_action_persists_without_reading_or_modifying_passwords(self):
         self.import_accounts()
         row = store.info_rows("alice")[0]
@@ -552,6 +661,15 @@ class AccountStoreTests(unittest.TestCase):
         run(["add", "-p", str(vault), "Filled"], [master, SECRET])
         with patch.object(store.getpass, "getpass", return_value=master):
             self.assertEqual(store.password_states("alice"), {"Empty": "未填密码", "Filled": "已设置"})
+        with (patch.object(store.sys, "stdin", Terminal()), patch.object(store.sys, "stdout", Terminal()),
+              patch.object(store.getpass, "getpass", return_value=master) as prompt):
+            store.delete_password("alice", "Filled")
+            prompt.assert_called_once()
+        with patch.object(store.getpass, "getpass", return_value=master):
+            self.assertEqual(store.password_states("alice"), {"Empty": "未填密码"})
+            backup = next((self.root / "backups/password-deletions/alice").glob("*.kdbx"))
+            with patch.object(store, "vault_for", return_value=backup):
+                self.assertEqual(store.password_states("alice"), {"Empty": "未填密码", "Filled": "已设置"})
 
 
 if __name__ == "__main__":

@@ -59,11 +59,66 @@ class TerminalListTests(unittest.TestCase):
     def test_next_page_and_row_selection_return_the_full_record(self):
         rows = records(30)
         browser = ui.RecordBrowser("demo", lambda _: rows)
-        with (patch.object(ui, "screen", fake_screen), patch.object(ui, "read_key", side_effect=["next", "down", "enter"]),
+        with (patch.object(ui, "screen", fake_screen), patch.object(ui, "read_key", side_effect=["next", "down", "enter", "o"]),
               patch.object(ui.shutil, "get_terminal_size", return_value=SimpleNamespace(columns=80, lines=24)),
               patch.object(ui.sys, "stdout", Terminal())):
             selected = browser.choose()
         self.assertEqual(selected, rows[14])
+
+    def test_enter_expands_in_place_and_enter_again_collapses(self):
+        rows = [dict(kind="info", id=1, category="work", key="职位", value="工程师", remark="摘要",
+                     details=[("备注", "完整备注：第一行\n第二行说明", "37")])]
+        browser = ui.RecordBrowser("demo", lambda _: rows)
+        frames = []
+
+        def key(_):
+            frames.append(output.getvalue().split("\033[H\033[2J")[-1])
+            return ["enter", "enter", "q"][len(frames) - 1]
+
+        with (patch.object(ui, "screen", fake_screen), patch.object(ui, "read_key", side_effect=key),
+              patch.object(ui.sys, "stdout", Terminal()) as output, patch.dict(os.environ, {"NO_COLOR": "1"})):
+            self.assertIsNone(browser.choose())
+        self.assertNotIn("完整备注", frames[0])
+        self.assertIn("完整备注：第一行", frames[1])
+        self.assertIn("第二行说明", frames[1])
+        self.assertNotIn("完整备注", frames[2])
+
+    def test_long_expanded_notes_wrap_and_scroll_without_clipping_content(self):
+        note = "长备注中文" * 25 + "\n备注末尾，必须完整显示。"
+        row = dict(kind="info", id=1, category="work", key="职位", value="工程师", details=[("备注", note, "37")])
+        for columns, height in ((30, 12), (80, 24)):
+            browser = ui.RecordBrowser("demo", lambda _: [row])
+            browser.expanded = ui.record_key(row)
+            found = []
+            for offset in range(0, 80, height - 8):
+                browser.offset = offset
+                browser.follow = False
+                lines, current, _ = browser.render([row], columns, height)
+                self.assertTrue(all(ui.width(line) <= columns for line in lines))
+                self.assertLessEqual(len(lines), height)
+                found += lines
+                self.assertEqual(current, [row])
+            for part in ui.wrap(note, columns - 14):
+                self.assertTrue(any(line.endswith(part) for line in found), part)
+                self.assertNotIn("…", part)
+
+    def test_picker_enter_confirms_and_delete_only_acts_on_expanded_records(self):
+        rows = records(1)
+        for picker, keys, action in ((True, ["enter"], None), (False, ["x", "enter", "delete"], "delete")):
+            browser = ui.RecordBrowser("demo", lambda _: rows, picker=picker)
+            with (patch.object(ui, "screen", fake_screen), patch.object(ui, "read_key", side_effect=keys),
+                  patch.object(ui.sys, "stdout", Terminal())):
+                chosen = browser.choose()
+            self.assertEqual(chosen, {**rows[0], "_action": action} if action else rows[0])
+        self.assertNotIn("_action", rows[0])
+
+    def test_detail_labels_and_values_cannot_inject_terminal_controls(self):
+        row = dict(details=[("\x1b[2J备注", "第一行\n第二行\x1b[31m内容", "37")])
+        with patch.dict(os.environ, {"NO_COLOR": "1"}):
+            lines = ui.detail_lines(row, 50)
+        self.assertNotIn("\x1b", "".join(lines))
+        self.assertTrue(any("第一行" in line for line in lines))
+        self.assertTrue(any("第二行" in line for line in lines))
 
     def test_many_dimensions_and_all_three_sections_fit_every_page(self):
         rows = [dict(kind="account", name="GitHub", username="demo-user", status="已设置", remark="开发账号")]
@@ -125,7 +180,7 @@ class TerminalListTests(unittest.TestCase):
             self.assertEqual(ui.color("title", "1;36"), "title")
 
     def test_escape_and_page_keys_do_not_hang_on_incomplete_sequences(self):
-        for sequence, expected in ((b"\x1b", "q"), (b"\x1b[6~", "next"), (b"\x1b[5~", "prev")):
+        for sequence, expected in ((b"\x1b", "q"), (b"\x1b[6~", "page_down"), (b"\x1b[5~", "page_up"), (b"\x1b[3~", "delete")):
             reader, writer = os.pipe()
             try:
                 os.write(writer, sequence)

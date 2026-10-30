@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from zipfile import BadZipFile, ZipFile
 
 from terminal_menu import choose_action
-from terminal_list import RecordBrowser, category_label, color
+from terminal_list import RecordBrowser, category_label, clip, color
 import vault_session
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -268,6 +268,115 @@ def update_note(identity: str, item_id: int, text: str) -> None:
         db.execute("UPDATE items SET note=?,updated_at=datetime('now') WHERE id=? AND identity=?", (text, item_id, identity))
 
 
+NOTE_INTERNAL = {"type", "label", "password_title", "source", "source_row", "source_owner", "username"}
+NOTE_LABELS = {"provider": "服务商", "region": "地区", "purpose": "备注", "text": "备注"}
+
+
+def note_fields(raw):
+    detail = parse_note(raw)
+    if isinstance(detail, dict):
+        return [("meta:" + key, NOTE_LABELS.get(key, key), str(value))
+                for key, value in detail.items() if key not in NOTE_INTERNAL and value]
+    return [("note", "备注", detail)] if detail else []
+
+
+def record_details(row, infos):
+    kind = row["kind"]
+    if kind == "password":
+        fields = [("条目", row["title"], "37")]
+    elif kind == "account":
+        fields = [("账号", row["name"], "37"), ("登录名", row["username"], "37")]
+    else:
+        fields = [("维度", category_label(row["category"]), "2"), ("名称", row["key"], "37"), ("内容", row["value"], "37")]
+    if "status" in row:
+        fields.append(("密码状态", row["status"], "32" if row["status"] == "已设置" else "33"))
+    if kind == "password":
+        linked = "\n".join(f"{item['key']}: {item['value']}" for item in infos if item["link"] == row["title"])
+        fields.append(("关联资料", linked or "—", "2"))
+    else:
+        notes = note_fields(row["note"])
+        fields += [(label, value, "37") for _, label, value in notes] or [("备注", "—", "2")]
+        fields.append(("关联密码", row["link"] or "—", "2"))
+    return fields
+
+
+def delete_field(identity: str, item_id: int, field: str) -> None:
+    if field == "link":
+        set_password_link(identity, item_id, None)
+        return
+    with closing(sqlite3.connect(ROOT / "data" / "id.db")) as db, db:
+        row = db.execute("SELECT note FROM items WHERE id=? AND identity=?", (item_id, identity)).fetchone()
+        if row is None:
+            raise AccountError("该资料不属于当前身份。")
+        if field not in {key for key, _, _ in note_fields(row[0])}:
+            raise AccountError("该字段不能删除；名称和内容属于记录本身，可选择删除整条。")
+        detail = parse_note(row[0])
+        if isinstance(detail, dict):
+            del detail[field.removeprefix("meta:")]
+            note = json.dumps(detail, ensure_ascii=False)
+        else:
+            note = ""
+        db.execute("UPDATE items SET note=?,updated_at=datetime('now') WHERE id=? AND identity=?", (note, item_id, identity))
+
+
+def delete_item(identity: str, item_id: int) -> None:
+    with closing(sqlite3.connect(ROOT / "data" / "id.db")) as db, db:
+        db.execute("PRAGMA foreign_keys=ON")
+        if not db.execute("SELECT 1 FROM items WHERE id=? AND identity=?", (item_id, identity)).fetchone():
+            raise AccountError("该资料不属于当前身份。")
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='password_links'").fetchone():
+            db.execute("DELETE FROM password_links WHERE item_id=?", (item_id,))
+        db.execute("DELETE FROM items WHERE id=? AND identity=?", (item_id, identity))
+        db.execute("INSERT INTO events(identity,title,detail) VALUES(?,?,?)", (identity, "删除资料记录", f"资料 ID {item_id}"))
+
+
+def delete_password(identity: str, title: str) -> None:
+    if not title.strip("/") or not title.isprintable():
+        raise AccountError("密码条目路径无效。")
+    title = title.lstrip("/")
+    database = vault_for(identity)
+    with vault_session.session() as session:
+        session.unlock(database, fresh=True)
+
+        def paths():
+            result = vault_session.run_cli(["keepassxc-cli", "ls", "-R", "-f", str(database)], database,
+                                           text=True, capture_output=True, check=False)
+            if result.returncode:
+                raise AccountError("未能核对密码条目；已创建的加密备份会保留。")
+            return [path.lstrip("/") for path in result.stdout.splitlines() if path and not path.endswith("/")]
+
+        before = paths()
+        if title not in before:
+            raise AccountError("密码条目已不存在，请刷新列表。")
+        folder = (ROOT / "backups" / "password-deletions" / identity).resolve()
+        if not folder.is_relative_to(ROOT.resolve() / "backups"):
+            raise AccountError("备份目录不能通过符号链接指向项目备份目录之外，未删除密码。")
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup = folder / (datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".kdbx")
+        private_file(backup)
+        with database.open("rb") as source, backup.open("wb") as target:
+            shutil.copyfileobj(source, target)
+        result = vault_session.run_cli(["keepassxc-cli", "rm", str(database), title], database, check=False)
+        if result.returncode:
+            raise AccountError("密码条目未删除，加密备份已保留。")
+        try:
+            after = paths()
+            added = [path for path in (Counter(after) - Counter(before)).elements() if path.rsplit("/", 1)[-1] != "[empty]"]
+            moved = [path for path in added if path.rsplit("/", 1)[-1] == title.rsplit("/", 1)[-1]]
+            if len(added) != len(moved) or len(moved) > 1 or any(path in before for path in moved):
+                raise AccountError("条目已移入回收站，路径存在歧义，请在 KeePassXC 中继续整理；加密备份已保留。")
+            if moved:
+                result = vault_session.run_cli(["keepassxc-cli", "rm", str(database), moved[0]], database, check=False)
+                if result.returncode:
+                    raise AccountError("条目已移入回收站，尚未彻底删除；加密备份已保留。")
+        finally:
+            if (ROOT / "data" / "id.db").exists():
+                with closing(sqlite3.connect(ROOT / "data" / "id.db")) as db, db:
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE name='password_links'").fetchone():
+                        db.execute("DELETE FROM password_links WHERE entry_path=? AND item_id IN (SELECT id FROM items WHERE identity=?)", (title, identity))
+        print("密码条目已删除；加密备份：" + str(backup.relative_to(ROOT)))
+
+
 def account_rows(identity: str) -> list[dict]:
     accounts = []
     for row in info_rows(identity):
@@ -421,6 +530,8 @@ def list_records(identity: str, view: str = "all", category: str = "") -> int:
         if selected_type in ("all", "info"):
             records += [{**row, "remark": note_text(row["note"])} for row in infos
                         if row["category"] != "account" and (not browser.category or row["category"] == browser.category)]
+        for row in records:
+            row["details"] = record_details(row, infos)
         return records
 
     browser = RecordBrowser(identity, load, view, category=category)
@@ -445,33 +556,32 @@ def list_records(identity: str, view: str = "all", category: str = "") -> int:
             continue
         if row["kind"] == "password":
             print(color("\n" + safe_text(row["title"]), "1;36"))
-            linked = [item for item in info_rows(identity) if item["link"] == row["title"]]
-            for item in linked:
-                print(safe_text(f"  {item['key']}: {item['value']}"))
-            action = choose_action([("edit", "补填/修改密码"), ("command", "查看修改命令"), ("exit", "返回")], "操作")
+            action = row.get("_action") or choose_action([("edit", "补填/修改密码"), ("command", "查看修改命令"),
+                                                           ("delete", "删除整条密码"), ("exit", "返回")], "操作")
             if action == "edit":
                 write_entry(identity, row["title"], None, edit=True)
                 states = None
             elif action == "command":
                 print(entry_command("pass-edit", identity, row["title"]))
                 input("回车返回 ")
+            elif action == "delete":
+                confirmed = choose_action([("exit", "取消"), ("delete", "确认删除密码条目")],
+                                          safe_text(f"删除 [{identity}] {row['title']} 及其内容？先备份加密密码库，保留关联资料，需要再次验证主密码。"))
+                if confirmed == "delete":
+                    try:
+                        delete_password(identity, row["title"])
+                    except (AccountError, vault_session.VaultError) as exc:
+                        print(str(exc), file=sys.stderr)
+                        input("回车返回 ")
+                    states = None
             continue
-        print(color("\n" + safe_text(row["key"]), "1;36"))
-        print(safe_text(row["username"] if row["kind"] == "account" else row["value"]))
-        detail = parse_note(row["note"])
-        if isinstance(detail, dict):
-            internal = {"type", "label", "password_title", "source", "source_row", "source_owner"}
-            detail = " · ".join(f"{key}: {value}" for key, value in detail.items() if key not in internal and value)
-        if detail:
-            print(color("备注 · " + safe_text(str(detail)), "2"))
-        if row["link"]:
-            print(color("密码 · " + safe_text(row["link"]), "2"))
+        print(color("\n" + safe_text(row.get("name") or row["key"]), "1;36"))
         options = [("note", "编辑备注"), ("link", "关联/更换密码条目")]
         if row["kind"] == "account" and (not row["link"] or row.get("status") == "条目不存在"):
             options.append(("add", "新增密码并关联"))
         if row["link"]:
             options += [("edit", "修改关联密码"), ("command", "查看修改命令"), ("unlink", "解除关联")]
-        action = choose_action([*options, ("exit", "返回")], "操作")
+        action = row.get("_action") or choose_action([*options, ("field", "删除单个字段"), ("delete", "删除整条记录"), ("exit", "返回")], "操作")
         if action == "note":
             text = input("新备注（Enter 保留，- 清空）: ")
             if text:
@@ -487,6 +597,22 @@ def list_records(identity: str, view: str = "all", category: str = "") -> int:
                 set_password_link(identity, row["id"], chosen["title"])
         elif action == "unlink":
             set_password_link(identity, row["id"], None)
+        elif action == "field":
+            field_width = max(1, shutil.get_terminal_size((100, 24)).columns - 3)
+            fields = [(key, clip(label, field_width)) for key, label, _ in note_fields(row["note"])]
+            if row["link"]:
+                fields.append(("link", "密码关联"))
+            field = choose_action([("exit", "取消"), *fields], "选择要删除的字段；名称和内容可通过删除整条记录移除。")
+            if field != "exit":
+                confirmed = choose_action([("exit", "取消"), ("delete", "确认删除这个字段")],
+                                          safe_text(f"[{identity}] {row.get('name') or row['key']} · {dict(fields)[field]}"))
+                if confirmed == "delete":
+                    delete_field(identity, row["id"], field)
+        elif action == "delete":
+            confirmed = choose_action([("exit", "取消"), ("delete", "确认删除资料记录")],
+                                      safe_text(f"删除 [{identity}] {row.get('name') or row['key']} 及其关联？密码条目保留。"))
+            if confirmed == "delete":
+                delete_item(identity, row["id"])
         elif action in ("edit", "command"):
             if row["link"] not in passwords():
                 print("关联条目已不存在，请重新关联。")
