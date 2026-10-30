@@ -15,9 +15,10 @@
 | `make pass id=gene title="..."` | 复制密码；SSH 复制无效时输入 `v`、Enter 回退明文显示 |
 | `make pass-show id=gene title="..."` | 在当前交互终端明文显示密码，会留在终端记录 |
 | `make clipboard-check` | 重新测试当前 SSH 连接的本地剪贴板，只使用测试文字 |
-| `make pass-list id=gene` | 列出该身份 kdbx 里所有条目 |
+| `make pass-list id=gene` | 表格列出密码库条目、未填密码和录入/修改命令 |
 | `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
-| `make pass-add-manual id=gene title="..."` | 新增条目，手动输入密码 |
+| `make pass-add-manual` / `make pass-add-manual id=gene title="..."` | 选择账号或自定义条目，预填后手动录入密码 |
+| `make pass-edit id=gene title="..."` | 修改已有条目的密码；不提供标题时用方向键选择 |
 | `make grant id=gene title="..."` | 签发临时凭证，让 AI 不见明文地用密码 |
 | `make use token=... cmd='...'` | 用凭证代执行命令（密码经 `$ID_SECRET` 注入） |
 | `make grants` / `make revoke` | 列出活跃凭证 / 撤销（`revoke all=1` 全撤） |
@@ -58,6 +59,40 @@ make new id=gene
 3. **记一笔事件**：`make event id=gene`
 
 > 注意：`make item` / `make event` 的值里别用单引号，用双引号包整个值。
+
+### 统一查看、补填和修改密码
+
+邮箱、网站、服务器等账号共用入口：
+
+```bash
+make pass-list id=gene
+make pass-add-manual id=gene
+make pass-edit id=gene
+```
+
+`pass-list` 用类似 Docker 的对齐表格列出条目、密码状态、操作编号，表格下面给出完整可复制的命令。中文按终端显示宽度对齐；长标题在表格中截断，命令保留完整标题。密码状态分为“已设置”“未填密码”“状态未知”。SQLite 中登记的账号若没有相同标题的密码库条目，会单独标为“未关联条目”；它可能已用其他名称保存，请先核对已有条目。
+
+清单只让 KeePassXC 本地搜索空/非空密码，返回条目路径，不导出密码内容。主密码隐藏输入一次，仅通过 stdin 交给 KeePassXC，不保存到文件或命令行参数；同一次清单查询需要 KeePassXC 解锁数次。解锁失败会报错，不会把条目标成未填密码。搜索无法确定的条目标为“状态未知”。
+
+`pass-add-manual` 读取当前身份的所有 `account` 类资料，支持普通备注和结构化备注，与邮箱类型无关；提供了 `password_title` 时预填该标题，否则使用资料名称。用户名默认取账号值；结构化备注中的 `username` 可指定用户名。不在清单里的账号可选“自定义条目”。已有同名条目时新增会拒绝覆盖；修改用 `pass-edit`，未指定 `user=` 时保留原用户名。指定 `title=` 可直接录入，`make ai` 的预填命令继续有效。所有输入的条目密码由 KeePassXC 隐藏读取；这些操作只更新本地密码库，不会更改网站或服务器端的密码。
+
+### 导入邮箱表
+
+在本机导入 Excel 邮箱表，无需模型或网络：
+
+```bash
+python3 scripts/account_store.py import '/路径/邮箱.xlsx'
+# 使用者名称与身份不同时，明确指定归属（可重复）：
+python3 scripts/account_store.py import '/路径/邮箱.xlsx' --owner '表中使用者=gene'
+make pass-list
+make pass-add-manual
+```
+
+表头依次为“分类、服务商、使用者、账号、备注、密码备注、详细数据”。前五列整理到 SQLite，账号按身份和邮箱地址去重；未确认的使用者会跳过并提示。原表和导入前的 SQLite 备份保存在 `backups/mail-imports/`，文件权限 600，不进 git 或 Syncthing。**原表备份仍含未加密的机密字段**，保留期间请保护这台设备。
+
+导入后的邮箱进入统一账号清单，预填标题为 `邮箱 - 完整邮箱地址`，用户名为邮箱地址。通过 `make pass-add-manual` 选择账号、录入密码，也可选择“仅补录原表资料”重试补充资料。
+
+密码保存后，可将此邮箱对应的“密码备注、详细数据”作为 `原表补充资料.txt` 附件加密存入同一条目。KeePassXC 会再次要求解锁；这些字段不显示在终端，不写入 SQLite，不通过命令行参数或 AI 传递。临时附件仅在项目备份目录内创建、权限 600，结束后清理。原表只在导入设备保留；其他设备仍能录入密码，补充资料需回原设备录入后再同步 kdbx。确认全部资料已入库后，可自行清理含机密的原表与其备份。
 
 ### 用 AI 整理（`make ai`）
 

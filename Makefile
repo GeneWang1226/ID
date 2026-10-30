@@ -20,7 +20,7 @@ PR := \033[36m
 N  := \033[0m
 endif
 
-.PHONY: help check settings clipboard-check new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help check settings clipboard-check new passwd pass pass-show pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@e=""; [ -t 1 ] && e=$$(printf '\033'); \
@@ -63,10 +63,15 @@ pass-show: ## 明文显示密码，仅限交互终端（id=gene title="..."）
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	scripts/pass-ssh.py --show -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
-pass-list: ## 列出某身份 kdbx 里所有条目（id=gene）
-	@iv="$(id)"; [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	[ -n "$$iv" ] || { printf '$(ER)错误: 身份不能为空$(N)\n' >&2; exit 1; }; \
-	keepassxc-cli ls "identities/$$iv/passwords/$$iv.kdbx"
+pass-list pass-add-manual pass-edit: export ID_ENTRY_ID = $(id)
+pass-list pass-add-manual pass-edit: export ID_ENTRY_TITLE = $(title)
+pass-list pass-add-manual pass-edit: export ID_ENTRY_USER = $(user)
+
+pass-list: ## 表格列出条目、缺失密码和录入/修改命令（id 可选）
+	@python3 scripts/account_store.py list
+
+pass-edit: ## 修改已有条目的密码（id/title 可选，缺省方向键选择）
+	@python3 scripts/account_store.py edit
 
 pass-add: ## 新增条目并自动生成强密码（id=gene，缺省逐个询问）
 	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
@@ -75,12 +80,8 @@ pass-add: ## 新增条目并自动生成强密码（id=gene，缺省逐个询问
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli add -g -L 20 -l -U -n -s --every-group --exclude-similar -u "$$uv" "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
-pass-add-manual: ## 新增条目，手动输入密码（id=gene title="..."，缺省逐个询问）
-	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
-	uv="$(user)";  [ -n "$$uv" ] || read -p "$$(printf '$(PR)用户名(可空): $(N)')" uv; \
-	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	keepassxc-cli add -p -u "$$uv" "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
+pass-add-manual: ## 方向键选账号或自定义条目，手动录入密码（id/title/user 可选）
+	@python3 scripts/account_store.py add
 
 grant: ## 签发临时凭证给 AI 用（id=gene title="..." ttl=600，缺省逐个询问）
 	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
