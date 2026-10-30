@@ -28,7 +28,9 @@ import tomllib
 import urllib.request
 from pathlib import Path
 
+from password_entries import infer_secret_title
 from terminal_clipboard import check_clipboard, plaintext_allowed
+from terminal_menu import choose_action
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG = BASE_DIR / "config" / "config.toml"
@@ -276,31 +278,6 @@ def infer_secret_action(secret: dict, text: str) -> str:
     return "copy" if wants_copy and not wants_save else "save"
 
 
-def infer_secret_title(text: str) -> str:
-    compact = re.sub(r"\s+", "", text)
-    match = re.search(r"([\u4e00-\u9fffA-Za-z0-9_.-]+?)(?:账号|账户)?密码", compact, re.I)
-    english_match = re.search(r"([A-Za-z0-9_.-]+)\s*(?:password|passwd|passcode)", text, re.I)
-    if not match and english_match:
-        match = english_match
-    title = "密码"
-    if match:
-        prefix = re.sub(
-            r"^(?:(?:重新设置|重置|重设|更新|修改|保存|存入|录入|新增|添加|设置|给我的|给我|给|看看|查看|看|显示|帮我|帮忙|请|我的|我|这个|该|my|the))+",
-            "",
-            match.group(1),
-            flags=re.I,
-        )
-        prefix = re.sub(
-            r"(?:(?:账号|账户)?(?:保存|存入|录入|新增|添加|设置|修改|重置|重设|更新))$|(?:账号|账户)$",
-            "",
-            prefix,
-            flags=re.I,
-        )
-        if prefix:
-            title = f"{prefix}密码"
-    return title
-
-
 def infer_lookup_secret(text: str, identity: str) -> dict | None:
     """查看请求没有被模型列出时，生成不含密码内容的本地复制提示。"""
     lower = text.lower()
@@ -364,73 +341,6 @@ def copy_secret_entries(secrets: list[dict], show: bool = False) -> list[dict]:
             )
             failed.append(secret)
     return failed
-
-
-def choose_action(options: list[tuple[str, str]]) -> str:
-    """用方向键选择下一步；选项文字只显示，不进入 shell。"""
-    if not options:
-        return "exit"
-    if not _TTY:
-        return "exit"
-    try:
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_stty = termios.tcgetattr(fd)
-    except (ImportError, AttributeError, OSError):
-        print("\n下一步：")
-        for i, (_, label) in enumerate(options, 1):
-            print(f"{i}. {label}")
-        try:
-            answer = input("选择 [1]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            return "exit"
-        try:
-            return options[int(answer or "1") - 1][0]
-        except (ValueError, IndexError):
-            return "exit"
-
-    selected = 0
-
-    def render(final: bool = False) -> None:
-        if final:
-            sys.stdout.write(f"\033[{len(options)}A")
-        for i, (_, label) in enumerate(options):
-            marker = "✓" if final and i == selected else "❯" if not final and i == selected else " "
-            sys.stdout.write(f"\r\033[K{marker} {label}\n")
-        sys.stdout.flush()
-
-    print("\n" + head("下一步（↑/↓选择，Enter 确认，q 退出）："))
-    try:
-        tty.setcbreak(fd)
-        render()
-        while True:
-            key = os.read(fd, 1)
-            if key in (b"\r", b"\n"):
-                break
-            if key in (b"q", b"Q", b"\x03"):
-                return "exit"
-            if key == b"\x1b":
-                sequence = os.read(fd, 2)
-                if sequence == b"[A":
-                    selected = (selected - 1) % len(options)
-                elif sequence == b"[B":
-                    selected = (selected + 1) % len(options)
-                else:
-                    continue
-                sys.stdout.write(f"\033[{len(options)}A")
-                render()
-            elif key in (b"k", b"j"):
-                selected = (selected - 1 if key == b"k" else selected + 1) % len(options)
-                sys.stdout.write(f"\033[{len(options)}A")
-                render()
-    except (KeyboardInterrupt, OSError):
-        return "exit"
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_stty)
-    render(final=True)
-    return options[selected][0]
 
 
 def write_draft(items: list[dict], events: list[dict]) -> None:

@@ -54,7 +54,7 @@ pass: ## 复制密码（SSH 可按 v 回退明文；id=gene title="..."）
 	if [ -n "$${SSH_CONNECTION:-}" ]; then \
 		scripts/pass-ssh.py -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
 	else \
-		keepassxc-cli clip "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
+		scripts/pass-ssh.py --native -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
 	fi
 
 pass-show: ## 明文显示密码，仅限交互终端（id=gene title="..."）

@@ -71,6 +71,8 @@ make new id=gene
 
 AI 菜单也可直接选择“明文显示密码”，等价于 `make pass-show id=gene title="GitHub 账户密码"`。明文只显示在当前终端，不回传给模型，不写入 AI 对话或项目日志，但可能保留在终端滚屏或外部会话录制中。两种显示入口均拒绝非交互式终端和输出重定向。
 
+`title=` 优先按密码库中的完整标题或分组路径查询。查询失败时，`make pass` 和 `make pass-show` 可选择“搜索已有条目标题”，用方向键选择实际条目后重试；例如 `title='查一下我的github密码'` 会按 GitHub 匹配 `GitHub 账户密码` 等已有标题，多个匹配始终由你选择。搜索只在本地列出标题，不发送给模型，也不会新增或修改密码。KeePassXC 每次命令都需解锁，因此搜索和重试会再次提示主密码。
+
 **随时撤销明文权限**：`make settings` → “明文显示密码”切换为“禁止” → 保存并退出。设置写入 `config/config.toml` 的 `[terminal].allow_plaintext`；AI 菜单、`make pass-show` 和 `v` 回退都受这个开关控制。显示前会重新读取配置，因此已打开的会话也会遵守撤销。关闭开关不能清除已经显示过的终端记录；配置缺失或无效时默认禁止明文显示。
 
 再次运行 `make settings` 即可热加载修改后的 `config/config.toml`，无需重启 CLI；Web 使用同一份非敏感配置。

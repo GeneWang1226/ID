@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SSH 剪贴板复制；用户明确选择时在终端明文显示密码。"""
+"""本地或 SSH 剪贴板复制；用户明确选择时在终端明文显示密码。"""
 
 import argparse
 import base64
@@ -7,7 +7,50 @@ import select
 import subprocess
 import sys
 
+from password_entries import matching_entries
 from terminal_clipboard import check_clipboard, plaintext_allowed, write_clipboard
+from terminal_menu import choose_action
+
+
+def select_entry(database: str, query: str) -> str | None:
+    action = choose_action(
+        [("search", "搜索已有条目标题"), ("exit", "取消")],
+        "读取未成功，可搜索标题（↑/↓选择，Enter 确认，q 取消）：",
+    )
+    if action != "search":
+        return None
+    print("只列出本地条目标题；KeePassXC 需要重新解锁。", file=sys.stderr)
+    result = subprocess.run(
+        ["keepassxc-cli", "search", database, "title:*"],
+        stdin=sys.stdin, stdout=subprocess.PIPE, text=True, check=False,
+    )
+    if result.returncode:
+        return None
+    paths = result.stdout.splitlines()
+    if not paths:
+        print("密码库中没有可选择的条目。", file=sys.stderr)
+        return None
+    matches = matching_entries(paths, query)
+    if not matches:
+        print("没有匹配的标题，请从已有条目中选择。", file=sys.stderr)
+    candidates = matches or paths
+    options = [
+        (str(i), "".join(char if char.isprintable() else "?" for char in path))
+        for i, path in enumerate(candidates)
+    ]
+    selected = choose_action(
+        [*options, ("exit", "取消")],
+        "选择实际条目（↑/↓选择，Enter 确认，q 取消）：",
+    )
+    return None if selected == "exit" else candidates[int(selected)]
+
+
+def read_entry(database: str, entry: str, native: bool) -> subprocess.CompletedProcess:
+    command = ["keepassxc-cli", "clip"] if native else ["keepassxc-cli", "show", "-s", "-a", "Password"]
+    return subprocess.run(
+        [*command, database, entry],
+        stdin=sys.stdin, stdout=None if native else subprocess.PIPE, check=False,
+    )
 
 
 def show_password(password: bytes) -> int:
@@ -21,7 +64,9 @@ def show_password(password: bytes) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--show", action="store_true", help="明文显示密码")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--show", action="store_true", help="明文显示密码")
+    mode.add_argument("--native", action="store_true", help="使用 KeePassXC 本机剪贴板")
     parser.add_argument("--check", action="store_true", help="重新测试当前终端剪贴板")
     parser.add_argument("database", nargs="?")
     parser.add_argument("entry", nargs="?")
@@ -37,7 +82,7 @@ def main() -> int:
     if not args.database or not args.entry:
         parser.error("需要指定数据库和条目")
 
-    if not args.show and check_clipboard() == "unavailable":
+    if not args.show and not args.native and check_clipboard() == "unavailable":
         if not plaintext_allowed():
             print("剪贴板不可用，且全局明文显示已禁用；未解锁密码库。", file=sys.stderr)
             return 1
@@ -55,12 +100,11 @@ def main() -> int:
         print("密码将明文显示在当前终端，可能保留在滚屏记录中。", file=sys.stderr)
 
     try:
-        result = subprocess.run(
-            ["keepassxc-cli", "show", "-s", "-a", "Password", args.database, args.entry],
-            stdin=sys.stdin,
-            stdout=subprocess.PIPE,
-            check=False,
-        )
+        result = read_entry(args.database, args.entry, args.native)
+        if result.returncode:
+            entry = select_entry(args.database, args.entry)
+            if entry is not None:
+                result = read_entry(args.database, entry, args.native)
     except KeyboardInterrupt:
         return 130
     except OSError as exc:
@@ -68,6 +112,8 @@ def main() -> int:
         return 1
     if result.returncode:
         return result.returncode
+    if args.native:
+        return 0
 
     password = result.stdout.removesuffix(b"\n")
     if args.show:

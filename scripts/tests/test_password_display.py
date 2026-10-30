@@ -39,6 +39,7 @@ class PasswordDisplayTests(unittest.TestCase):
             patch.object(clipboard.subprocess, "run", return_value=result) as run,
             patch.object(clipboard.select, "select", return_value=([1] if readable else [], [], [])) as select,
             patch.object(clipboard, "check_clipboard", return_value="supported"),
+            patch.object(clipboard, "choose_action", return_value="exit"),
             patch.object(clipboard, "plaintext_allowed", return_value=allowed, side_effect=[True, False] if revoke else None),
             patch.dict(os.environ, {"TMUX": ""}),
         ):
@@ -112,6 +113,11 @@ class PasswordDisplayTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertNotIn(PASSWORD, output + errors)
 
+    def test_revoking_after_unlock_blocks_direct_show(self):
+        code, output, errors, _ = self.invoke(show=True, revoke=True)
+        self.assertEqual(code, 1)
+        self.assertNotIn(PASSWORD, output + errors)
+
     def test_rejects_redirects_and_noninteractive_input_before_unlock(self):
         for stdin, stdout in ((Terminal(), io.StringIO()), (io.StringIO(), Terminal())):
             with (
@@ -182,6 +188,96 @@ class PasswordDisplayTests(unittest.TestCase):
         options = dict(choose.call_args.args[0])
         self.assertNotIn("secrets-copy", options)
         self.assertIn("secrets-show", options)
+
+
+class EntryLookupTests(unittest.TestCase):
+    def invoke(self, results, choices, *, native=False, allowed=True):
+        output, errors = Terminal(), io.StringIO()
+        args = ["pass-ssh.py", "--native" if native else "--show", "demo.kdbx", "查一下我的github密码"]
+        with (
+            patch.object(clipboard.sys, "argv", args),
+            patch.object(clipboard.sys, "stdin", Terminal()),
+            patch.object(clipboard.sys, "stdout", output),
+            patch.object(clipboard.sys, "stderr", errors),
+            patch.object(clipboard.subprocess, "run", side_effect=results) as run,
+            patch.object(clipboard, "choose_action", side_effect=choices) as choose,
+            patch.object(clipboard, "plaintext_allowed", return_value=allowed),
+            patch.object(clipboard, "check_clipboard") as probe,
+        ):
+            code = clipboard.main()
+        return code, output.getvalue(), errors.getvalue(), run, choose, probe
+
+    def test_exact_entry_is_attempted_first_without_normalization_or_search(self):
+        result = SimpleNamespace(returncode=0, stdout=(PASSWORD + "\n").encode())
+        code, output, _, run, choose, _ = self.invoke([result], [])
+        self.assertEqual(code, 0)
+        self.assertEqual(output, PASSWORD + "\n")
+        self.assertEqual(run.call_args.args[0][-1], "查一下我的github密码")
+        self.assertEqual(run.call_count, 1)
+        choose.assert_not_called()
+
+    def test_natural_language_uses_actual_selected_path_without_changing_entries(self):
+        results = [
+            SimpleNamespace(returncode=1, stdout=b""),
+            SimpleNamespace(returncode=0, stdout="/个人/GitHub 账户密码\n/工作/GITHUB\n/邮件\n"),
+            SimpleNamespace(returncode=0, stdout=(PASSWORD + "\n").encode()),
+        ]
+        code, output, errors, run, choose, _ = self.invoke(results, ["search", "1"])
+        self.assertEqual(code, 0)
+        self.assertEqual(output, PASSWORD + "\n")
+        self.assertNotIn(PASSWORD, errors)
+        candidates = dict(choose.call_args_list[1].args[0])
+        self.assertEqual(candidates, {"0": "/个人/GitHub 账户密码", "1": "/工作/GITHUB", "exit": "取消"})
+        self.assertEqual(run.call_args_list[1].args[0], ["keepassxc-cli", "search", "demo.kdbx", "title:*"])
+        self.assertEqual(run.call_args_list[2].args[0][-1], "/工作/GITHUB")
+        self.assertTrue(all(call.args[0][1] in {"show", "search"} for call in run.call_args_list))
+
+    def test_cancel_or_failed_search_never_retries_password_read(self):
+        for results, choices, calls in (
+            ([SimpleNamespace(returncode=1, stdout=b"")], ["exit"], 1),
+            ([SimpleNamespace(returncode=1, stdout=b""), SimpleNamespace(returncode=1, stdout="")], ["search"], 2),
+            ([SimpleNamespace(returncode=1, stdout=b""), SimpleNamespace(returncode=0, stdout="/GitHub\n")], ["search", "exit"], 2),
+        ):
+            code, output, errors, run, _, _ = self.invoke(results, choices)
+            self.assertEqual(code, 1)
+            self.assertNotIn(PASSWORD, output + errors)
+            self.assertEqual(run.call_count, calls)
+
+    def test_empty_database_has_no_selectable_entry(self):
+        results = [SimpleNamespace(returncode=1, stdout=b""), SimpleNamespace(returncode=0, stdout="")]
+        code, output, errors, run, choose, _ = self.invoke(results, ["search"])
+        self.assertEqual(code, 1)
+        self.assertEqual(choose.call_count, 1)
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("没有可选择", errors)
+        self.assertNotIn(PASSWORD, output + errors)
+
+    def test_unmatched_request_offers_existing_titles(self):
+        results = [SimpleNamespace(returncode=1, stdout=b""), SimpleNamespace(returncode=0, stdout="/GitLab\n")]
+        _, _, errors, _, choose, _ = self.invoke(results, ["search", "exit"])
+        self.assertEqual(dict(choose.call_args.args[0]), {"0": "/GitLab", "exit": "取消"})
+        self.assertIn("没有匹配", errors)
+
+    def test_native_copy_retries_clip_without_reading_password_into_python(self):
+        results = [
+            SimpleNamespace(returncode=1),
+            SimpleNamespace(returncode=0, stdout="/GitHub\n"),
+            SimpleNamespace(returncode=0),
+        ]
+        code, output, errors, run, _, probe = self.invoke(results, ["search", "0"], native=True, allowed=False)
+        self.assertEqual(code, 0)
+        for index in (0, 2):
+            self.assertEqual(run.call_args_list[index].args[0][1], "clip")
+            self.assertIsNone(run.call_args_list[index].kwargs["stdout"])
+        self.assertNotIn(PASSWORD, output + errors)
+        probe.assert_not_called()
+
+    def test_title_extraction_handles_lookup_language_and_grouped_entries(self):
+        for query in ("查一下我的github密码", "查看我的 GitHub 账户密码", "复制 GitHub 密码", "show my GitHub password"):
+            with self.subTest(query=query):
+                self.assertEqual(organizer.infer_secret_title(query).casefold(), "github密码")
+                self.assertEqual(clipboard.matching_entries(["/GitHub 账户密码", "/工作/GITHUB", "/GitLab"], query),
+                                 ["/GitHub 账户密码", "/工作/GITHUB"])
 
 
 if __name__ == "__main__":
