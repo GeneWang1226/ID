@@ -49,14 +49,14 @@ sudo apt install make
 ~/ID/scripts/add-identity.sh <身份名>
 ```
 
-脚本会自动：复制模板 → 权限设为 700 → 用 `.env` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
+脚本会自动：复制模板 → 权限设为 700 → 用 `config/secrets/.secrets.env` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
 
 ### 新建密码库的初始密码
 
-初始密码写在 `~/ID/.env`，键名 `kdbx_initial_password`，文件权限必须是 `600`（模板见 `.env.example`，新设备 `cp .env.example .env` 后填写）。改这个值只影响之后新建的库。
+初始密码写在 `~/ID/config/secrets/.secrets.env`，键名 `KDBX_INITIAL_PASSWORD`，文件权限必须是 `600`（模板见 `config/secrets/.secrets.env.example`，新设备复制后填写）。旧 `docker/.env` 中的 `kdbx_initial_password` 仍可兼容读取。改这个值只影响之后新建的库。
 
 ```bash
-chmod 600 ~/ID/.env
+chmod 600 ~/ID/config/secrets/.secrets.env
 ```
 
 ### ⚠️ 修改新密码库的主密码（必做）
@@ -67,11 +67,13 @@ chmod 600 ~/ID/.env
 keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 ```
 
-按提示先输入 `.env` 里的 `kdbx_initial_password`，再输两遍新密码。
+按提示先输入 `config/secrets/.secrets.env` 里的 `KDBX_INITIAL_PASSWORD`，再输两遍新密码。
 
 > `template/passwords/template.kdbx` 不再参与新建。脚本会当场 `db-create`。
 
 ### 临时凭证（AI 代执行密码）
+
+交互式 `make ai` / `make list` 的主密码缓存由 `scripts/vault_session.py` 管理，仅在同一进程中复用，不跨独立命令或终端。切换库、退出会话和 AI `/lock` 会清除缓存；空闲 5 分钟后再次使用需解锁。明文显示和修改已有密码强制重新验证。该缓存不替代 `make grant` 的 AI 授权机制，主密码不会提供给模型。
 
 `make grant` 把某条目的密码提取成临时凭证，AI 用 `make use` 代执行命令而不见明文（机制与分级 Tags 见 [GUIDE.md](GUIDE.md) 场景四）。维护要点：
 
@@ -79,6 +81,18 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 - 过期凭证在每次 `grant` / `grants` 时顺手清理，无需定时任务
 - 条目的 `ai-auto` / `ai-deny` 标签用 `make tag id=<身份> title=<条目> tags=<标签>` 打（`tags=` 留空则清除）；也可在 KeePassXC 图形客户端打，标签随 kdbx 经 Syncthing 同步。`tag-entry.sh` 通过 XML 导出/注入/导入实现，会重建数据库——条目和附件保留，但数据库级的自定义设置（如加密参数）如有改动需自行复查
 - 日志只记「何时授权/使用了哪个条目」，出现泄露疑虑时 `grep grant logs/scripts.log` 核对后 `make revoke all=1`
+
+### SSH 终端剪贴板与明文权限
+
+SSH 连接首次使用 AI 或剪贴板时会要求粘贴测试文字；结果仅按当前连接缓存到 `config/.cache/clipboard/`，不进 git 或 Syncthing，不保存剪贴板内容。切换 SSH 客户端或 tmux 客户端会使用独立结果。运行 `make clipboard-check` 可强制重测。
+
+`make settings` 中的“明文显示密码”是全局权限，关闭后禁止所有项目明文入口，显示前会重新读取设置。该开关不会清除已有终端滚屏或外部会话录制。
+
+回归检查无需接触真实密码库：
+
+```bash
+python3 -m unittest discover -s scripts/tests -v
+```
 
 ### 修改模板
 
@@ -88,22 +102,26 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 
 所有身份共用一个 SQLite 库 `./data/id.db`，用 `identity` 列区分。首次启动 Web 界面时自动从 `template/data/schema.sql` 初始化。
 
+`make list` 的资料关联保存在同一库的 `password_links` 表，首次关联时自动创建。它只保存资料 ID 和本身份的 KDBX 条目路径，不存密码；新增关联不会改写 `items` 中的资料。关联随 SQLite 同步，KDBX 条目改名或移动后需在列表中重新关联。`make list type=info` 只读 SQLite，无需解锁密码库。
+
+`items.category=account` 独立显示为账号，其余分类作为个人信息维度；分类名可自定义，不需要迁移表结构。备注仍保存在 `items.note`；编辑普通备注直接更新文本，编辑导入账号的备注只更新 JSON 中的 `purpose`，其他结构化备注使用 `text` 字段，保留来源及关联元数据。
+
 **启动 Web 界面：**
 
 ```bash
-docker compose up -d
+make web
 ```
 
-打开 http://localhost:3000，输入访问密码（在 `~/ID/.env` 的 `WEB_PASSWORD`，改后 `docker compose up -d` 生效）。
+打开 http://localhost:3000，输入访问密码（在 `~/ID/docker/.env` 的 `WEB_PASSWORD`，改后 `make web` 生效）。
 
-AI 助手页（`/ai`）用的 `ai_api_key` / `ai_base_url` / `ai_model` 也由 compose 从 `.env` 注入容器（容器内 nextjs 用户读不了 600 权限的文件，所以走环境变量而不是挂载）。改了 AI 配置同样 `docker compose up -d` 重建生效。
+AI 助手页（`/ai`）使用 `config/secrets/.secrets.env` 提供的 `AI_API_KEY` 和挂载的 `config/config.toml`。运行 `make settings` 修改非敏感设置后，Web 每次请求都会重新读取；API key 修改后运行 `make web` 重建容器。
 
 **手动查库：**
 
 ```bash
 sqlite3 ./data/id.db
 # 或
-docker compose exec web sqlite3 /app/data/id.db
+docker compose -f docker/docker-compose.yml --env-file docker/.env exec web sqlite3 /app/data/id.db
 ```
 
 常用 SQL 示例见 `template/data/schema.sql` 末尾注释。
@@ -118,7 +136,7 @@ docker compose exec web sqlite3 /app/data/id.db
 
 ## 同步与备份（待接入）
 
-- [ ] **Syncthing**：添加文件夹时选 `~/ID`，不要只选 `identities/`，否则根目录的 `.stignore` 不生效。同步出去的是 `identities/`、`.env` 和 `data/id.db`；脚本、模板、文档、`.git` 被忽略。`.stignore` 本身不会被同步，新设备要从 git 拿一份，或手动复制。`.env` 到另一台机器后确认权限仍是 `600`。kdbx 和 SQLite 库都可以同步，但**避免两端同时改同一个库**。**开启交错版本控制（staggered versioning）**。身份文件的历史靠它，不靠 git。
+- [ ] **Syncthing**：添加文件夹时选 `~/ID`，不要只选 `identities/`，否则根目录的 `.stignore` 不生效。同步出去的是 `identities/` 和 `data/id.db`；`config/config.toml` 通过 git 同步，Docker 环境和 `config/secrets/.secrets.env` 留在各机器本地。`.stignore` 本身不会被同步，新设备要从 git 拿一份，或手动复制。kdbx 和 SQLite 库都可以同步，但**避免两端同时改同一个库**。**开启交错版本控制（staggered versioning）**。身份文件的历史靠它，不靠 git。
 - [ ] **备份**：定期 `tar` 打包 + `gpg -c` 加密后存外部存储；SQLite 库直接复制 `./data/id.db` 或用 `sqlite3 ./data/id.db .dump > backup.sql` 导出。
 
 ## 故障排查

@@ -40,7 +40,7 @@ check_dupes .stignore
 # ===== 2. git 不得追踪的敏感路径 =====
 sec "2. git 追踪检查（这些绝不能入库）"
 tracked="$(git ls-files)"
-for pat in '^identities/' '^\.env$' '\.kdbx$' '\.turso\.env$' '^logs/' '^data/.*\.db$' '^backups/'; do
+for pat in '^identities/' '^docker/\.env$' '^config/secrets/\.secrets\.env$' '\.kdbx$' '\.turso\.env$' '^logs/' '^data/.*\.db$' '^backups/'; do
     hits="$(printf '%s\n' "$tracked" | grep -E "$pat" || true)"
     if [[ -n "$hits" ]]; then
         bad "被 git 追踪: $pat"
@@ -52,14 +52,16 @@ done
 
 # ===== 3. .gitignore 关键规则生效 =====
 sec "3. .gitignore 规则生效"
-for p in identities .env logs data/id.db; do
+for p in identities docker/.env config/secrets/.secrets.env logs data/id.db; do
     if git check-ignore -q "$p" 2>/dev/null; then
         ok "$p 被忽略"
     else
         bad "$p 未被 .gitignore 覆盖"
     fi
 done
-printf '%s\n' "$tracked" | grep -qx '.env.example' && ok ".env.example 已被 git 追踪（模板要在库里）" || bad ".env.example 未被 git 追踪"
+[[ -f docker/.env.example ]] && ok "docker/.env.example 模板存在（提交时应纳入 git）" || bad "docker/.env.example 模板缺失"
+[[ -f config/secrets/.secrets.env.example ]] && ok "config/secrets/.secrets.env.example 模板存在（提交时应纳入 git）" || bad "config/secrets/.secrets.env.example 模板缺失"
+[[ -f config/config.toml ]] && ok "config/config.toml 存在" || bad "config/config.toml 缺失"
 k="$(find identities -name '*.kdbx' 2>/dev/null | head -1)"
 if [[ -n "$k" ]]; then
     git check-ignore -q "$k" && ok "$k 被忽略" || bad "$k 未被忽略"
@@ -67,8 +69,8 @@ fi
 
 # ===== 4. .stignore 覆盖检查 =====
 sec "4. .stignore 覆盖检查"
-for line in /scripts /template /assets /docs /web /Makefile /docker-compose.yml \
-            /AGENTS.md /README.md /.gitignore /.env.example .git /logs /backups .turso.env; do
+for line in /scripts /template /assets /docs /web /docker /config /Makefile \
+            /AGENTS.md /README.md /.gitignore .git /logs /backups .turso.env; do
     # .stignore 可能带 (?d)/(?i) 前缀，匹配时去掉再比
     if sed 's/^(?[di])//g' .stignore | grep -qxF "$line"; then
         ok "$line"
@@ -85,7 +87,8 @@ perm() {
     m=$(stat -c '%a' "$1")
     [[ "$m" == "$2" ]] && ok "$1 权限 $m" || bad "$1 权限 $m，应为 $2"
 }
-perm .env 600
+perm docker/.env 600
+perm config/secrets/.secrets.env 600
 perm logs 700
 for d in identities/*/; do perm "${d%/}" 700; done
 while IFS= read -r kdbx; do perm "$kdbx" 600; done < <(find identities -name '*.kdbx' 2>/dev/null)

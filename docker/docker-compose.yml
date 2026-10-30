@@ -1,0 +1,16 @@
+services:
+  web:
+    build: ../web
+    ports:
+      - "3000:3000"
+    environment:
+      - WEB_PASSWORD=${WEB_PASSWORD:-changeme}
+      - DB_PATH=/app/data/id.db
+      # API key 由 make web 从 config/secrets/.secrets.env 注入；非敏感设置从 config/config.toml 热加载
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_CONFIG_PATH=/app/config.toml
+    volumes:
+      - ../data:/app/data
+      - ../template:/app/template:ro
+      - ../config/config.toml:/app/config.toml:ro
+    restart: unless-stopped
