@@ -15,8 +15,8 @@
 | `make pass id=gene title="..."` | 复制密码；SSH 复制无效时输入 `v`、Enter 回退明文显示 |
 | `make pass-show id=gene title="..."` | 在当前交互终端明文显示密码，会留在终端记录 |
 | `make clipboard-check` | 重新测试当前 SSH 连接的本地剪贴板，只使用测试文字 |
-| `make list id=gene` | 分区、分页查看个人信息与密码，默认 `type=all` |
-| `make list id=gene type=info` / `type=password` | 只看个人信息 / 密码 |
+| `make list id=gene` | 分区、分页查看账号、密码与个人信息，默认 `type=all` |
+| `make list id=gene type=account` / `type=password` / `type=info` | 只看账号 / 密码 / 个人信息 |
 | `make pass-list id=gene` | 等同 `make list id=gene type=password` |
 | `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
 | `make pass-add-manual` / `make pass-add-manual id=gene title="..."` | 选择账号或自定义条目，预填后手动录入密码 |
@@ -62,23 +62,34 @@ make new id=gene
 
 > 注意：`make item` / `make event` 的值里别用单引号，用双引号包整个值。
 
-### 查看个人信息与密码
+### 查看账号、密码与个人信息
 
-个人信息存在 SQLite，密码存在 KDBX。统一入口默认显示全部，按两个区域展示：
+账号和个人信息存在 SQLite，密码存在 KDBX。统一入口默认显示全部，分为账号、密码、个人信息三个平级区域：
 
 ```bash
 make list id=gene
+make list id=gene type=account
 make list id=gene type=info
 make list id=gene type=password
+make list id=gene type=info cat=work
 ```
 
-↑/↓ 选择记录，←/→、PgUp/PgDn 或 n/p 翻页，Enter 打开详情和操作；1/2/3 切换全部、密码、个人信息，r 刷新，q 退出。列表随终端高度分页，中文列宽对齐，长内容缩略后可在详情查看。标题和选中行使用青色，已设密码绿色，空密码黄色，表头和辅助信息灰色；设置 `NO_COLOR=1` 可关闭颜色。
+↑/↓ 选择记录，←/→、PgUp/PgDn 或 n/p 翻页，Enter 打开详情和操作；1/2/3/4 切换全部、账号、密码、个人信息，d 选择个人信息维度，r 刷新，q 退出。列表随终端高度分页，中文列宽对齐，长内容缩略后可在详情查看。标题和选中行使用青色，已设密码绿色，空密码黄色，表头和辅助信息灰色；设置 `NO_COLOR=1` 可关闭颜色。
 
-密码区只列 KDBX 里的实际条目，状态为“已设置”“未填密码”“状态未知”；SQLite 中的用户名、邮箱、地址、偏好等只列在个人信息区，不会被当作缺失密码。选择密码条目后可修改密码，或查看完整的 `make pass-edit` 命令；不再默认打印整屏命令。
+账号区直接显示登录名或邮箱，以及关联密码的状态：“已设置”“未填密码”“状态未知”。“未关联”表示尚未选择对应的 KDBX 条目，不代表没有密码；“条目不存在”表示关联路径已失效。账号可新增密码并自动关联，也可关联已有密码。密码区只列 KDBX 里的实际条目；选中后可修改密码，或查看完整的 `make pass-edit` 命令。
 
-**关联资料与密码**：在个人信息区选中 GitHub 用户名等记录，Enter → “关联/更换密码条目”，再选实际 KDBX 条目。多条资料可关联同一条密码，选择后的关联会保存到 SQLite；原资料内容保留。已关联的资料可直接修改对应密码、查看修改命令或解除关联。关联按当前身份和条目路径保存；KDBX 中移动或改名后，需要重新关联。
+个人信息按维度分组，例如地址、联系方式、偏好、身份信息、工作、教育；分类名不受此清单限制，可记录任意非机密属性。`cat=` 和 d 只筛选个人信息，选“全部维度”可恢复。写入仍使用 `make item`，例如：
 
-`type=info` 无需解锁或安装 KeePassXC，查看关联路径也不读取密码。查看密码区时，清单只让 KeePassXC 本地检查空/非空密码，返回路径，不导出密码。主密码仅通过 stdin 交给 KeePassXC，不落盘或写入参数；同一次状态检查会在内部解锁数次，界面切换复用本次结果。r 刷新或修改密码后会重新检查。解锁失败会报错，无法确定状态时显示“状态未知”。
+```bash
+make item id=gene cat=work key=职位 value=工程师 note=远程办公
+make item id=gene cat=preference key=语言 value=中文 note=日常沟通
+```
+
+账号和每条个人信息都可在详情中“编辑备注”；Enter 保留原备注，输入 `-` 清空。宽屏列表显示备注摘要，完整内容在详情查看。编辑导入账号的备注会保留原表来源、服务商和密码关联；密码备注仍由 KeePassXC 管理。
+
+**关联资料与密码**：在账号或个人信息区选中记录，Enter → “关联/更换密码条目”，再选实际 KDBX 条目。多条资料可关联同一条密码，选择后的关联会保存到 SQLite；原资料内容保留。已关联的资料可直接修改对应密码、查看修改命令或解除关联。关联按当前身份和条目路径保存；KDBX 中移动或改名后，需要重新关联。
+
+`type=info` 无需解锁或安装 KeePassXC；`type=account` 仅在有密码关联时解锁以检查状态。清单只让 KeePassXC 本地检查空/非空密码，返回路径，不导出密码。主密码仅通过 stdin 交给 KeePassXC，不落盘或写入参数；同一次状态检查会在内部解锁数次，界面切换复用本次结果。r 刷新或修改密码后会重新检查。解锁失败会报错，无法确定状态时显示“状态未知”。
 
 ### 补填和修改密码
 

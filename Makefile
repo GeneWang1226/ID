@@ -68,7 +68,8 @@ list pass-list pass-add-manual pass-edit: export ID_ENTRY_TITLE = $(title)
 list pass-list pass-add-manual pass-edit: export ID_ENTRY_USER = $(user)
 
 list: export ID_LIST_TYPE = $(if $(type),$(type),all)
-list: ## 分页查看个人信息和密码（id 可选；type=all/password/info）
+list: export ID_LIST_CATEGORY = $(cat)
+list: ## 分页查看账号、密码、个人信息（type=all/account/password/info；cat=信息维度）
 	@python3 scripts/account_store.py list
 
 pass-list: ## 只查看密码条目，等同 make list type=password
@@ -144,7 +145,7 @@ show: db-init ## 打印某身份的全部信息（id=gene）
 
 item: db-init ## 写/改条目（id=gene，缺省逐个询问；值里别用单引号）
 	@iv="$(id)";     [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	cv="$(cat)";    [ -n "$$cv" ] || read -p "$$(printf '$(PR)分类(account/address/preference/id-info/contact): $(N)')" cv; \
+	cv="$(cat)";    [ -n "$$cv" ] || read -p "$$(printf '$(PR)分类(account 为账号，其他可自定义，如 work/address/preference): $(N)')" cv; \
 	kv="$(key)";    [ -n "$$kv" ] || read -p "$$(printf '$(PR)名称: $(N)')" kv; \
 	vv="$(value)";  [ -n "$$vv" ] || read -p "$$(printf '$(PR)内容: $(N)')" vv; \
 	nv="$(note)";   [ -n "$$nv" ] || read -p "$$(printf '$(PR)备注(可空): $(N)')" nv; \

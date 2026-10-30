@@ -102,6 +102,8 @@ python3 -m unittest discover -s scripts/tests -v
 
 `make list` 的资料关联保存在同一库的 `password_links` 表，首次关联时自动创建。它只保存资料 ID 和本身份的 KDBX 条目路径，不存密码；新增关联不会改写 `items` 中的资料。关联随 SQLite 同步，KDBX 条目改名或移动后需在列表中重新关联。`make list type=info` 只读 SQLite，无需解锁密码库。
 
+`items.category=account` 独立显示为账号，其余分类作为个人信息维度；分类名可自定义，不需要迁移表结构。备注仍保存在 `items.note`；编辑普通备注直接更新文本，编辑导入账号的备注只更新 JSON 中的 `purpose`，其他结构化备注使用 `text` 字段，保留来源及关联元数据。
+
 **启动 Web 界面：**
 
 ```bash

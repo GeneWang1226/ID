@@ -81,6 +81,11 @@ class AccountStoreTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.root / "data" / "id.db")) as db:
             return db.execute("SELECT identity,value,note FROM items ORDER BY identity").fetchall()
 
+    def add_item(self, category, key, value, note="", identity="alice"):
+        with contextlib.closing(sqlite3.connect(self.root / "data" / "id.db")) as db, db:
+            return db.execute("INSERT INTO items(identity,category,key,value,note) VALUES(?,?,?,?,?)",
+                              (identity, category, key, value, note)).lastrowid
+
     def test_import_is_idempotent_and_keeps_secrets_out_of_sqlite(self):
         for shared in (False, True):
             workbook(self.source, self.rows, shared=shared)
@@ -257,8 +262,9 @@ class AccountStoreTests(unittest.TestCase):
                 store.list_passwords("alice")
         self.assertNotIn("未填密码", output.getvalue())
 
-    def test_list_keeps_personal_information_and_passwords_in_separate_sections(self):
+    def test_list_keeps_accounts_personal_information_and_passwords_separate(self):
         self.import_accounts()
+        self.add_item("work", "职位", "工程师", "远程办公")
         captured = []
 
         def choose(browser):
@@ -268,12 +274,15 @@ class AccountStoreTests(unittest.TestCase):
         with (patch.object(store, "password_states", return_value={"GitHub": "已设置", "服务器/空条目": "未填密码"}),
               patch.object(store.RecordBrowser, "choose", new=choose), contextlib.redirect_stdout(Terminal()) as output):
             self.assertEqual(store.list_records("alice"), 0)
-        self.assertEqual([row["kind"] for row in captured], ["password", "password", "info"])
-        self.assertEqual(captured[-1]["value"], "alice@example.com")
+        self.assertEqual([row["kind"] for row in captured], ["account", "password", "password", "info"])
+        self.assertEqual(captured[0]["username"], "alice@example.com")
+        self.assertEqual(captured[-1]["category"], "work")
+        self.assertEqual(captured[-1]["remark"], "远程办公")
         self.assertNotIn("make pass-add-manual", output.getvalue())
 
     def test_info_filter_never_unlocks_or_requires_a_password_vault(self):
         self.import_accounts()
+        self.add_item("preference", "语言", "中文")
         (self.root / "identities" / "alice" / "passwords" / "alice.kdbx").unlink()
         captured = []
 
@@ -288,6 +297,136 @@ class AccountStoreTests(unittest.TestCase):
             self.assertEqual(store.main(), 0)
         states.assert_not_called()
         self.assertEqual({row["kind"] for row in captured}, {"info"})
+
+    def test_accounts_use_only_explicit_links_for_password_status(self):
+        self.import_accounts({"待确认": "bob"})
+        rows = store.account_rows("alice")
+        store.set_password_link("alice", rows[0]["id"], "Group/Filled")
+        for key, path in (("empty", "Empty"), ("unknown", "Hidden"), ("missing", "Removed")):
+            item_id = self.add_item("account", key, key + "-login")
+            store.set_password_link("alice", item_id, path)
+        self.add_item("account", "Same name", "unlinked-login")
+        captured = []
+
+        def choose(browser):
+            captured.extend(browser.load(browser.view))
+            return None
+
+        with (patch.object(store, "password_states", return_value={"Group/Filled": "已设置", "Empty": "未填密码",
+                                                                  "Hidden": "状态未知", "Same name": "已设置"}) as states,
+              patch.object(store.RecordBrowser, "choose", new=choose)):
+            store.list_records("alice", "account")
+        self.assertEqual({row["username"]: row["status"] for row in captured}, {
+            "alice@example.com": "已设置", "empty-login": "未填密码", "unknown-login": "状态未知",
+            "missing-login": "条目不存在", "unlinked-login": "未关联"})
+        self.assertEqual({row["kind"] for row in captured}, {"account"})
+        states.assert_called_once_with("alice")
+
+    def test_unlinked_accounts_do_not_require_a_vault(self):
+        self.import_accounts()
+        captured = []
+
+        def choose(browser):
+            captured.extend(browser.load(browser.view))
+            return None
+
+        with patch.object(store, "password_states") as states, patch.object(store.RecordBrowser, "choose", new=choose):
+            store.list_records("alice", "account")
+        states.assert_not_called()
+        self.assertEqual(captured[0]["status"], "未关联")
+
+    def test_personal_dimensions_filter_only_personal_information(self):
+        self.import_accounts()
+        self.add_item("work", "职位", "工程师")
+        self.add_item("hobby", "乐器", "吉他")
+        self.add_item("work", "职位", "其他身份的职位", identity="bob")
+        captured = []
+
+        def choose(browser):
+            captured.extend(browser.load(browser.view))
+            return None
+
+        with (patch.object(store, "password_states", return_value={}),
+              patch.object(store.RecordBrowser, "choose", new=choose)):
+            store.list_records("alice", "all", "work")
+        self.assertEqual([row["kind"] for row in captured], ["account", "info"])
+        self.assertEqual(captured[-1]["value"], "工程师")
+
+    def test_dimension_picker_counts_only_current_identity_personal_information(self):
+        self.import_accounts()
+        self.add_item("work", "职位", "工程师")
+        self.add_item("hobby", "乐器", "吉他")
+        self.add_item("work", "职位", "其他职位", identity="bob")
+        seen = []
+
+        def choose(browser):
+            rows = browser.load(browser.view)
+            seen.append((browser.view, rows))
+            if len(seen) == 1:
+                return {"kind": "dimension"}
+            if browser.view == "dimension":
+                return next(row for row in rows if row["category"] == "hobby")
+            return None
+
+        with patch.object(store, "password_states") as states, patch.object(store.RecordBrowser, "choose", new=choose):
+            store.list_records("alice", "info")
+        states.assert_not_called()
+        self.assertEqual([(r["category"], r["count"]) for r in seen[1][1]], [("", 2), ("hobby", 1), ("work", 1)])
+        self.assertEqual([r["category"] for r in seen[-1][1]], ["hobby"])
+
+    def test_note_updates_preserve_account_metadata_and_links_and_reject_other_identity(self):
+        self.import_accounts({"待确认": "bob"})
+        own = store.info_rows("alice")[0]
+        other = store.info_rows("bob")[0]
+        metadata = json.loads(own["note"])
+        store.set_password_link("alice", own["id"], "Logins/Mail")
+        store.update_note("alice", own["id"], "日常使用 · Team's $account")
+        updated = store.info_rows("alice")[0]
+        self.assertEqual(json.loads(updated["note"]), {**metadata, "purpose": "日常使用 · Team's $account"})
+        self.assertEqual(updated["link"], "Logins/Mail")
+        self.assertEqual(updated["value"], own["value"])
+        self.assertEqual(store.account_rows("alice")[0]["remark"], "日常使用 · Team's $account")
+        with self.assertRaises(store.AccountError):
+            store.update_note("alice", other["id"], "不可修改")
+        self.assertEqual(store.info_rows("bob")[0], other)
+        store.update_note("alice", own["id"], "")
+        self.assertEqual(json.loads(store.info_rows("alice")[0]["note"]), {**metadata, "purpose": ""})
+
+    def test_personal_notes_support_plain_text_and_preserve_structured_attributes(self):
+        self.import_accounts()
+        for raw in ("原备注", '{"source":"manual","text":"原备注"}'):
+            item_id = self.add_item("work", raw, "工程师", raw)
+            store.update_note("alice", item_id, "中文备注\n第二行 ' 引号")
+            row = next(r for r in store.info_rows("alice") if r["id"] == item_id)
+            self.assertEqual(store.note_text(row["note"]), "中文备注\n第二行 ' 引号")
+            if raw.startswith("{"):
+                self.assertEqual(json.loads(row["note"])["source"], "manual")
+            store.update_note("alice", item_id, "")
+            self.assertEqual(store.note_text(next(r for r in store.info_rows("alice") if r["id"] == item_id)["note"]), "")
+
+    def test_notes_menu_saves_clears_and_keeps_on_enter(self):
+        self.import_accounts()
+        item_id = self.add_item("work", "职位", "工程师", "初始备注")
+        for text, expected in (("新备注", "新备注"), ("", "新备注"), ("-", "")):
+            row = next(r for r in store.info_rows("alice") if r["id"] == item_id)
+            with (patch.object(store.RecordBrowser, "choose", side_effect=[row, None]),
+                  patch.object(store, "choose_action", return_value="note"), patch("builtins.input", return_value=text),
+                  patch.object(store, "password_states") as states, contextlib.redirect_stdout(Terminal())):
+                store.list_records("alice", "info")
+            states.assert_not_called()
+            self.assertEqual(next(r for r in store.info_rows("alice") if r["id"] == item_id)["note"], expected)
+
+    def test_add_from_account_links_only_after_successful_password_creation(self):
+        self.import_accounts()
+        row = store.account_rows("alice")[0]
+        row["note"] = row["raw_note"]
+        for result in (1, 0):
+            with (patch.object(store.RecordBrowser, "choose", side_effect=[row, None]),
+                  patch.object(store, "choose_action", return_value="add"),
+                  patch.object(store, "write_entry", return_value=result) as write, contextlib.redirect_stdout(Terminal())):
+                store.list_records("alice", "account")
+            write.assert_called_once_with("alice", row["title"], "alice@example.com")
+            self.assertEqual(store.info_rows("alice")[0]["link"], None if result else row["title"])
 
     def test_legacy_pass_list_contains_only_actual_vault_entries(self):
         self.import_accounts()

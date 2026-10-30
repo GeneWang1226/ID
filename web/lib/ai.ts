@@ -81,7 +81,7 @@ const SYSTEM_PROMPT = `你是身份资料整理助手，运行在用户的本地
 }
 
 规则：
-- items 的 category 只能是: account / address / preference / id-info / contact
+- 账号的 category 用 account；其他个人信息按维度使用 address / preference / id-info / contact / work / education 等，也可用简短分类名记录其他事情和属性
 - key 用简洁标识（如邮箱地址、账号名），value 是内容，note 放备注；所有条目都归属当前身份
 - events 记录值得留痕的事（注册、导入、换绑），没有就给空数组
 - **密码、授权码、恢复助记词、密钥绝不写进 items/events**，只在 secrets 里列标题，提醒用户手动存 kdbx，不要输出机密内容本身

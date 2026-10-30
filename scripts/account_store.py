@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from zipfile import BadZipFile, ZipFile
 
 from terminal_menu import choose_action
-from terminal_list import RecordBrowser, color
+from terminal_list import RecordBrowser, category_label, color
 
 ROOT = Path(__file__).resolve().parents[1]
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -240,16 +240,40 @@ def set_password_link(identity: str, item_id: int, path: str | None) -> None:
                            (item_id, path.lstrip("/")))
 
 
+def parse_note(raw: str) -> dict | str:
+    try:
+        detail = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+    return detail if isinstance(detail, dict) else raw
+
+
+def note_text(raw: str) -> str:
+    detail = parse_note(raw)
+    if isinstance(detail, dict):
+        return str(detail.get("purpose" if detail.get("type") == "mail-account" else "text") or "")
+    return detail
+
+
+def update_note(identity: str, item_id: int, text: str) -> None:
+    with closing(sqlite3.connect(ROOT / "data" / "id.db")) as db, db:
+        row = db.execute("SELECT note FROM items WHERE id=? AND identity=?", (item_id, identity)).fetchone()
+        if row is None:
+            raise AccountError("该资料不属于当前身份。")
+        detail = parse_note(row[0])
+        if isinstance(detail, dict):
+            detail["purpose" if detail.get("type") == "mail-account" else "text"] = text
+            text = json.dumps(detail, ensure_ascii=False)
+        db.execute("UPDATE items SET note=?,updated_at=datetime('now') WHERE id=? AND identity=?", (text, item_id, identity))
+
+
 def account_rows(identity: str) -> list[dict]:
     accounts = []
     for row in info_rows(identity):
         if row["category"] != "account":
             continue
         key, username, raw = row["key"], row["value"], row["note"]
-        try:
-            note = json.loads(raw)
-        except (TypeError, ValueError):
-            note = {}
+        note = parse_note(raw)
         if not isinstance(note, dict):
             note = {}
         title = row["link"] or note.get("password_title") or key
@@ -257,7 +281,8 @@ def account_rows(identity: str) -> list[dict]:
         username = note.get("username", key if email_key else username)
         if not isinstance(title, str) or not isinstance(username, str) or not title.strip():
             raise AccountError("账号的标题或用户名格式无效。")
-        accounts.append({"id": row["id"], "title": title, "username": username, "note": note})
+        accounts.append({**row, "kind": "account", "title": title, "username": username, "note": note,
+                         "raw_note": raw, "name": note.get("provider") or key, "remark": note_text(raw)})
     return accounts
 
 
@@ -356,7 +381,7 @@ def entry_command(target: str, identity: str, title: str, username: str | None =
     return "make " + target + " " + " ".join(f"{key}={shlex.quote(value.replace('$', '$$'))}" for key, value in values.items())
 
 
-def list_records(identity: str, view: str = "all") -> int:
+def list_records(identity: str, view: str = "all", category: str = "") -> int:
     states = None
 
     def passwords():
@@ -368,15 +393,20 @@ def list_records(identity: str, view: str = "all") -> int:
     def load(selected_type):
         infos = info_rows(identity)
         records = []
-        if selected_type != "info":
+        if selected_type in ("all", "account"):
+            for row in account_rows(identity):
+                status = passwords().get(row["link"], "条目不存在") if row["link"] else "未关联"
+                records.append({**row, "note": row["raw_note"], "status": status})
+        if selected_type in ("all", "password"):
             counts = Counter(row["link"] for row in infos if row["link"])
-            records = [dict(kind="password", title=title, status=status, linked=counts[title])
-                       for title, status in passwords().items()]
-        if selected_type != "password":
-            records += infos
+            records += [dict(kind="password", title=title, status=status, linked=counts[title])
+                        for title, status in passwords().items()]
+        if selected_type in ("all", "info"):
+            records += [{**row, "remark": note_text(row["note"])} for row in infos
+                        if row["category"] != "account" and (not browser.category or row["category"] == browser.category)]
         return records
 
-    browser = RecordBrowser(identity, load, view)
+    browser = RecordBrowser(identity, load, view, category=category)
     while True:
         row = browser.choose()
         if row is None:
@@ -385,6 +415,16 @@ def list_records(identity: str, view: str = "all") -> int:
             states = None
             continue
         if row["kind"] == "filter":
+            continue
+        if row["kind"] == "dimension":
+            counts = Counter(item["category"] for item in info_rows(identity) if item["category"] != "account")
+            candidates = [dict(kind="dimension", category="", label="全部维度", count=sum(counts.values()))]
+            candidates += [dict(kind="dimension", category=key, label=category_label(key), count=count)
+                           for key, count in sorted(counts.items())]
+            chosen = RecordBrowser(identity, lambda _: candidates, "dimension", picker=True).choose()
+            if chosen:
+                browser.category, browser.view = chosen["category"], "info"
+                browser.page = browser.selected = 0
             continue
         if row["kind"] == "password":
             print(color("\n" + safe_text(row["title"]), "1;36"))
@@ -400,11 +440,8 @@ def list_records(identity: str, view: str = "all") -> int:
                 input("回车返回 ")
             continue
         print(color("\n" + safe_text(row["key"]), "1;36"))
-        print(safe_text(row["value"]))
-        try:
-            detail = json.loads(row["note"])
-        except (TypeError, ValueError):
-            detail = row["note"]
+        print(safe_text(row["username"] if row["kind"] == "account" else row["value"]))
+        detail = parse_note(row["note"])
         if isinstance(detail, dict):
             internal = {"type", "password_title", "source", "source_row", "source_owner"}
             detail = " · ".join(f"{key}: {value}" for key, value in detail.items() if key not in internal and value)
@@ -412,11 +449,21 @@ def list_records(identity: str, view: str = "all") -> int:
             print(color("备注 · " + safe_text(str(detail)), "2"))
         if row["link"]:
             print(color("密码 · " + safe_text(row["link"]), "2"))
-        options = [("link", "关联/更换密码条目")]
+        options = [("note", "编辑备注"), ("link", "关联/更换密码条目")]
+        if row["kind"] == "account" and (not row["link"] or row.get("status") == "条目不存在"):
+            options.append(("add", "新增密码并关联"))
         if row["link"]:
             options += [("edit", "修改关联密码"), ("command", "查看修改命令"), ("unlink", "解除关联")]
         action = choose_action([*options, ("exit", "返回")], "操作")
-        if action == "link":
+        if action == "note":
+            text = input("新备注（Enter 保留，- 清空）: ")
+            if text:
+                update_note(identity, row["id"], "" if text == "-" else text)
+        elif action == "add":
+            if not write_entry(identity, row["title"], row["username"]):
+                set_password_link(identity, row["id"], row["title"])
+                states = None
+        elif action == "link":
             candidates = [dict(kind="password", title=title, status=status) for title, status in passwords().items()]
             chosen = RecordBrowser(identity, lambda _: candidates, "password", picker=True).choose()
             if chosen:
@@ -451,11 +498,12 @@ def main() -> int:
         command_parser.add_argument("--title", default=os.environ.get("ID_ENTRY_TITLE") or None)
         command_parser.add_argument("--username", default=os.environ.get("ID_ENTRY_USER") or None)
         if command == "list":
-            command_parser.add_argument("--type", choices=("all", "password", "info"),
+            command_parser.add_argument("--type", choices=("all", "account", "password", "info"),
                                         default=os.environ.get("ID_LIST_TYPE") or "all")
+            command_parser.add_argument("--category", default=os.environ.get("ID_LIST_CATEGORY") or "")
     args = parser.parse_args()
-    if args.command == "list" and args.type not in ("all", "password", "info"):
-        parser.error("type 只能是 all、password 或 info")
+    if args.command == "list" and args.type not in ("all", "account", "password", "info"):
+        parser.error("type 只能是 all、account、password 或 info")
     try:
         if args.command == "import":
             if any("=" not in item for item in args.owner):
@@ -469,7 +517,7 @@ def main() -> int:
         if identity is None:
             return 130
         if args.command == "list":
-            return list_records(identity, args.type)
+            return list_records(identity, args.type, args.category)
         title = args.title
         if not title:
             states = password_states(identity)

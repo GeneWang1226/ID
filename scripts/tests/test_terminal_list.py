@@ -23,7 +23,7 @@ def fake_screen():
 
 def records(count=2):
     passwords = [dict(kind="password", title=f"服务器/{i}", status="未填密码", linked=0) for i in range(count)]
-    return passwords + [dict(kind="info", id=1, category="account", key="github-username", value="demo-user", link=None)]
+    return passwords + [dict(kind="info", id=1, category="work", key="职位", value="工程师", remark="远程办公", link=None)]
 
 
 class TerminalListTests(unittest.TestCase):
@@ -49,10 +49,10 @@ class TerminalListTests(unittest.TestCase):
         rows = records(30)
         browser = ui.RecordBrowser("demo", lambda _: rows)
         found = []
-        for page in range(4):
+        _, _, pages = browser.render(rows, 80, 24)
+        for page in range(pages):
             browser.page = page
-            _, current, pages = browser.render(rows, 80, 24)
-            self.assertEqual(pages, 4)
+            _, current, _ = browser.render(rows, 80, 24)
             found += current
         self.assertEqual(found, rows)
 
@@ -63,7 +63,31 @@ class TerminalListTests(unittest.TestCase):
               patch.object(ui.shutil, "get_terminal_size", return_value=SimpleNamespace(columns=80, lines=24)),
               patch.object(ui.sys, "stdout", Terminal())):
             selected = browser.choose()
-        self.assertEqual(selected, rows[10])
+        self.assertEqual(selected, rows[14])
+
+    def test_many_dimensions_and_all_three_sections_fit_every_page(self):
+        rows = [dict(kind="account", name="GitHub", username="demo-user", status="已设置", remark="开发账号")]
+        rows += records(2)[:2]
+        rows += [dict(kind="info", category=f"自定义维度{i}", key="属性" * 20, value="内容", remark="备注") for i in range(20)]
+        for columns, height in ((30, 12), (60, 16), (100, 24), (120, 40)):
+            browser = ui.RecordBrowser("demo", lambda _: rows)
+            _, _, pages = browser.render(rows, columns, height)
+            found = []
+            for page in range(pages):
+                browser.page = page
+                lines, current, _ = browser.render(rows, columns, height)
+                self.assertLessEqual(len(lines), height)
+                self.assertTrue(all(ui.width(line) <= columns for line in lines), (columns, lines))
+                found += current
+            self.assertEqual(found, rows)
+
+    def test_account_login_status_and_notes_are_visible_on_wide_screens(self):
+        rows = [dict(kind="account", name="GitHub", username="demo-user", status="已设置", remark="开发账号")]
+        browser = ui.RecordBrowser("demo", lambda _: rows, "account")
+        lines, _, _ = browser.render(rows, 100, 24)
+        output = "\n".join(lines)
+        for value in ("GitHub", "demo-user", "已设置", "开发账号"):
+            self.assertIn(value, output)
 
     def test_type_switches_reload_only_the_requested_view(self):
         loaded = []
@@ -83,12 +107,14 @@ class TerminalListTests(unittest.TestCase):
             return []
 
         browser = ui.RecordBrowser("demo", load)
-        with (patch.object(ui, "screen", checked_screen), patch.object(ui, "read_key", side_effect=["2", "3", "q"]),
+        with (patch.object(ui, "screen", checked_screen), patch.object(ui, "read_key", side_effect=["2", "3", "4", "d", "q"]),
               patch.object(ui.sys, "stdout", Terminal())):
             self.assertEqual(browser.choose(), {"kind": "filter"})
             self.assertEqual(browser.choose(), {"kind": "filter"})
+            self.assertEqual(browser.choose(), {"kind": "filter"})
+            self.assertEqual(browser.choose(), {"kind": "dimension"})
             self.assertIsNone(browser.choose())
-        self.assertEqual(loaded, ["all", "password", "info"])
+        self.assertEqual(loaded, ["all", "account", "password", "info", "info"])
 
     def test_color_has_hierarchy_and_can_be_disabled(self):
         with patch.dict(os.environ, {"TERM": "xterm-256color"}, clear=True), patch.object(ui.sys, "stdout", Terminal()):

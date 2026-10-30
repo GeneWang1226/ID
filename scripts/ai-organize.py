@@ -115,7 +115,7 @@ def system_prompt(identity: str) -> str:
 }}
 
 规则：
-- category 只能是: account / address / preference / id-info / contact
+- 账号的 category 用 account；其他个人信息按维度使用 address / preference / id-info / contact / work / education 等，也可用简短分类名记录其他事情和属性
 - key 用简洁标识（如 QQ号、github-username），value 是内容，note 放备注
 - item 只有 category、key、value 都非空时才输出；只有“有一个账号/密码”但没有可保存内容时，不要生成空 value 占位条目
 - events 记录值得留痕的事（注册、导入、换绑），没有就给空数组

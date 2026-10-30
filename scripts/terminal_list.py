@@ -1,11 +1,25 @@
 """带类型筛选和分页的终端列表，不接触资料存储。"""
 
 from contextlib import contextmanager
+from itertools import groupby
 import os
 import select
 import shutil
 import sys
 import unicodedata
+
+
+VIEWS = (("all", "全部"), ("account", "账号"), ("password", "密码"), ("info", "个人信息"))
+DIMENSIONS = {"address": "地址", "contact": "联系方式", "preference": "偏好", "id-info": "身份信息",
+              "work": "工作", "education": "教育", "health": "健康", "finance": "财务", "asset": "资产"}
+
+
+def category_label(category):
+    return DIMENSIONS.get(category, category)
+
+
+def section(row):
+    return row["kind"], row.get("category", "") if row["kind"] == "info" else ""
 
 
 def width(text: str) -> int:
@@ -63,40 +77,60 @@ def screen():
 
 
 class RecordBrowser:
-    def __init__(self, identity, load, view="all", *, picker=False):
+    def __init__(self, identity, load, view="all", *, picker=False, category=""):
         self.identity, self.load, self.view = identity, load, view
         self.picker = picker
+        self.category = category
         self.page = self.selected = 0
 
     def render(self, records, columns, height):
-        if columns < 30 or height < 10:
+        if columns < 30 or height < 12:
             return [clip("请扩大终端窗口，q 退出", columns)], [], 1
-        page_size = max(1, height - 15)
-        pages = max(1, (len(records) + page_size - 1) // page_size)
+        # 每组都需要标题、表头和间隔；分类多时也不能挤出屏幕。
+        batches, used, previous = [[]], 0, None
+        for row in records:
+            group = section(row)
+            cost = 1 + (3 if group != previous else 0)
+            if batches[-1] and used + cost > height - 8:
+                batches.append([])
+                used, previous, cost = 0, None, 4
+            batches[-1].append(row)
+            used += cost
+            previous = group
+        pages = len(batches)
         self.page = min(self.page, pages - 1)
-        start = self.page * page_size
-        current = records[start:start + page_size]
+        current = batches[self.page]
         self.selected = min(self.selected, max(0, len(current) - 1))
         lines = [color(clip(f"ID  /  {self.identity}", columns), "1;36"), ""]
-        tabs = [("all", "全部"), ("password", "密码"), ("info", "个人信息")]
-        lines.append(color("选择密码条目", "1;36") if self.picker else
-                     "   ".join(color(label, "1;36" if key == self.view else "2") for key, label in tabs))
+        lines.append(color("选择维度" if self.view == "dimension" else "选择密码条目", "1;36") if self.picker else
+                     "   ".join(color(label, "1;36" if key == self.view else "2") for key, label in VIEWS))
         lines.append("")
-        for kind, label in (("password", "密码"), ("info", "个人信息")):
-            group = [(i, row) for i, row in enumerate(current) if row["kind"] == kind]
-            if not group:
-                continue
-            lines.append(color(label, "1"))
+        index = 0
+        for (kind, category), group in groupby(current, key=section):
+            label = "个人信息 / " + category_label(category) if kind == "info" else dict(VIEWS).get(kind, "维度")
+            lines.append(color(clip(label, columns), "1"))
             available = max(20, columns - 2)
             if kind == "password":
                 widths = [max(6, available - 26), 10, 12] if columns >= 50 and not self.picker else [available - 12, 10]
                 headers = ["条目", "密码", "关联资料"][:len(widths)]
+            elif kind == "account":
+                if columns >= 100:
+                    widths = [22, available - 58, 10, 20]
+                    headers = ["账号", "登录名 / 邮箱", "密码", "备注"]
+                elif columns >= 60:
+                    name_width = min(24, available // 3)
+                    widths = [name_width, available - name_width - 14, 10]
+                    headers = ["账号", "登录名 / 邮箱", "密码"]
+                else:
+                    widths, headers = [available - 12, 10], ["登录名 / 邮箱", "密码"]
+            elif kind == "dimension":
+                widths, headers = [available - 10, 8], ["维度", "条数"]
             elif columns >= 90:
-                widths = [10, 22, max(10, available - 58), 20]
-                headers = ["分类", "名称", "内容", "关联密码"]
+                widths = [22, available - 46, 20]
+                headers = ["名称", "内容", "备注"]
             elif columns >= 60:
-                widths = [max(7, available // 3), max(8, available - 26 - available // 3), 22]
-                headers = ["名称", "内容", "关联密码"]
+                widths = [22, available - 24]
+                headers = ["名称", "内容"]
             else:
                 widths = [available // 2 - 1, available - available // 2 - 1]
                 headers = ["名称", "内容"]
@@ -112,23 +146,29 @@ class RecordBrowser:
                 return prefix + plain
 
             lines.append(color(row_line(headers), "2"))
-            for index, row in group:
+            for row in group:
                 if kind == "password":
                     cells = [row["title"], row["status"], str(row.get("linked", 0))]
-                else:
-                    cells = [row["category"], row["key"], row["value"] or "—", row.get("link") or "—"]
-                    if columns < 90:
-                        cells = cells[1:]
+                elif kind == "account":
+                    cells = [row["name"], row["username"] or "—", row["status"], row.get("remark") or "—"]
                     if columns < 60:
-                        cells = cells[:2]
+                        cells = cells[1:3]
+                elif kind == "dimension":
+                    cells = [row["label"], str(row["count"])]
+                else:
+                    cells = [row["key"], row["value"] or "—", row.get("remark") or "—"]
                 lines.append(row_line(cells, index == self.selected, row.get("status", "")))
+                index += 1
             lines.append("")
         if not records:
             lines.append(color("  暂无记录", "2"))
         lines += [color(f"第 {self.page + 1}/{pages} 页  ·  {len(records)} 条", "2"),
                   color(clip("↑↓ 选择  ←→/PgUp/PgDn 翻页  Enter " + ("确认" if self.picker else "详情/操作"), columns), "2")]
         if not self.picker:
-            lines.append(color(clip("1 全部  2 密码  3 个人信息  r 刷新  q 退出", columns), "2"))
+            shortcuts = "1 全部  2 账号  3 密码  4 信息  d 维度  r 刷新  q 退出" if columns >= 90 else "1全 2号 3密 4信 d类 r刷 q退"
+            lines.append(color(clip(shortcuts, columns), "2"))
+            if self.category and self.view in ("all", "info"):
+                lines[3] = color(clip("维度：" + category_label(self.category) + "（d 更换）", columns), "2")
         else:
             lines.append(color("q 返回", "2"))
         return lines, current, pages
@@ -159,10 +199,12 @@ class RecordBrowser:
                     if self.selected:
                         self.selected -= 1
                     elif self.page:
-                        self.page, self.selected = self.page - 1, max(0, size.lines - 16)
-                elif not self.picker and key in ("1", "2", "3"):
-                    self.view = {"1": "all", "2": "password", "3": "info"}[key]
+                        self.page, self.selected = self.page - 1, len(records)
+                elif not self.picker and key in ("1", "2", "3", "4"):
+                    self.view = VIEWS[int(key) - 1][0]
                     self.page = self.selected = 0
                     return {"kind": "filter"}
+                elif key == "d" and not self.picker:
+                    return {"kind": "dimension"}
                 elif key == "r" and not self.picker:
                     return {"kind": "refresh"}
