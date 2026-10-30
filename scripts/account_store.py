@@ -22,6 +22,7 @@ from zipfile import BadZipFile, ZipFile
 
 from terminal_menu import choose_action
 from terminal_list import RecordBrowser, category_label, color
+import vault_session
 
 ROOT = Path(__file__).resolve().parents[1]
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -163,13 +164,13 @@ def attach_source(database: Path, title: str, account: str, note: dict) -> bool:
                              "补充资料（不显示内容；↑/↓选择，Enter 确认）：")
     if selected != "attach":
         return False
-    print("KeePassXC 需要再次解锁，用于保存补充资料。")
+    print("正在将补充资料保存到密码库。")
     # 临时文件只在项目内、权限 600；内容不进入 argv、日志或模型。
     with tempfile.TemporaryDirectory(prefix=".mail-notes-", dir=archive_dir) as directory:
         attachment = Path(directory) / "原表补充资料.txt"
         private_file(attachment, content.encode("utf-8"))
-        result = subprocess.run(["keepassxc-cli", "attachment-import", str(database), title,
-                                 "原表补充资料.txt", str(attachment)], check=False)
+        result = vault_session.run_cli(["keepassxc-cli", "attachment-import", str(database), title,
+                                       "原表补充资料.txt", str(attachment)], database, check=False)
     if result.returncode:
         print("补充资料未保存；原表仍在本机备份中，可选“仅补录原表资料”重试。")
     return result.returncode == 0
@@ -282,7 +283,7 @@ def account_rows(identity: str) -> list[dict]:
         if not isinstance(title, str) or not isinstance(username, str) or not title.strip():
             raise AccountError("账号的标题或用户名格式无效。")
         accounts.append({**row, "kind": "account", "title": title, "username": username, "note": note,
-                         "raw_note": raw, "name": note.get("provider") or key, "remark": note_text(raw)})
+                         "raw_note": raw, "name": note.get("label") or note.get("provider") or key, "remark": note_text(raw)})
     return accounts
 
 
@@ -292,7 +293,18 @@ def write_entry(identity: str, title: str, username: str | None, *, edit: bool =
     command = ["keepassxc-cli", "edit" if edit else "add", "-p"]
     if username is not None:
         command += ["-u", username]
-    return subprocess.run([*command, str(vault_for(identity)), title], check=False).returncode
+    vault = vault_for(identity)
+    command += [str(vault), title]
+    if vault_session.current() is None:
+        return subprocess.run(command, check=False).returncode
+    vault_session.current().unlock(vault, fresh=edit)
+    password = getpass.getpass("新条目密码: ")
+    if "\n" in password or "\r" in password:
+        raise AccountError("密码不能包含换行。")
+    try:
+        return vault_session.run_cli(command, vault, answers=(password,), check=False).returncode
+    finally:
+        del password
 
 
 def fill_passwords(identity: str | None, title: str | None = None, username: str | None = None) -> int:
@@ -346,15 +358,20 @@ def fill_passwords(identity: str | None, title: str | None = None, username: str
 
 def password_states(identity: str) -> dict[str, str]:
     vault = vault_for(identity)
-    master = getpass.getpass(f"{identity} · 主密码: ") + "\n"
+    master = None if vault_session.current() else getpass.getpass(f"{identity} · 主密码: ") + "\n"
     try:
         # KeePassXC 在内部检查密码；stdout 始终只有条目路径，不导出密码。
         def query(command):
-            result = subprocess.run(["keepassxc-cli", *command], input=master, text=True,
-                                    capture_output=True, check=False, env={**os.environ, "LANG": "C", "LC_ALL": "C"})
+            options = dict(text=True, capture_output=True, check=False, env={**os.environ, "LANG": "C", "LC_ALL": "C"})
+            if master is None:
+                result = vault_session.run_cli(["keepassxc-cli", *command], vault, **options)
+            else:
+                result = subprocess.run(["keepassxc-cli", *command], input=master, **options)
             no_matches = (command[0] == "search" and result.returncode == 1 and not result.stdout
                           and result.stderr.strip() == "No results for that search term.")
             if result.returncode and not no_matches:
+                if vault_session.current() is not None:
+                    vault_session.current().lock()
                 raise AccountError("密码库解锁或状态查询失败，未判断密码是否为空。")
             # shortcut: CLI 路径按行输出；标题含换行时需先在 KeePassXC 中重命名。
             return {path.lstrip("/") for path in result.stdout.splitlines() if path and not path.endswith("/")}
@@ -443,7 +460,7 @@ def list_records(identity: str, view: str = "all", category: str = "") -> int:
         print(safe_text(row["username"] if row["kind"] == "account" else row["value"]))
         detail = parse_note(row["note"])
         if isinstance(detail, dict):
-            internal = {"type", "password_title", "source", "source_row", "source_owner"}
+            internal = {"type", "label", "password_title", "source", "source_row", "source_owner"}
             detail = " · ".join(f"{key}: {value}" for key, value in detail.items() if key not in internal and value)
         if detail:
             print(color("备注 · " + safe_text(str(detail)), "2"))
@@ -486,6 +503,7 @@ def list_passwords(identity: str) -> int:
     return list_records(identity, "password")
 
 
+@vault_session.session()
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -531,7 +549,7 @@ def main() -> int:
     except (KeyboardInterrupt, EOFError):
         print("\n已取消，已保存的条目会保留。")
         return 130
-    except AccountError as exc:
+    except (AccountError, vault_session.VaultError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except (ValueError, OSError, KeyError, IndexError, BadZipFile, ET.ParseError, sqlite3.Error):

@@ -10,6 +10,7 @@ import sys
 from password_entries import matching_entries
 from terminal_clipboard import check_clipboard, plaintext_allowed, write_clipboard
 from terminal_menu import choose_action
+import vault_session
 
 
 def select_entry(database: str, query: str) -> str | None:
@@ -19,9 +20,10 @@ def select_entry(database: str, query: str) -> str | None:
     )
     if action != "search":
         return None
-    print("只列出本地条目标题；KeePassXC 需要重新解锁。", file=sys.stderr)
-    result = subprocess.run(
+    print("搜索本地条目标题。", file=sys.stderr)
+    result = vault_session.run_cli(
         ["keepassxc-cli", "search", database, "title:*"],
+        database,
         stdin=sys.stdin, stdout=subprocess.PIPE, text=True, check=False,
     )
     if result.returncode:
@@ -47,8 +49,9 @@ def select_entry(database: str, query: str) -> str | None:
 
 def read_entry(database: str, entry: str, native: bool) -> subprocess.CompletedProcess:
     command = ["keepassxc-cli", "clip"] if native else ["keepassxc-cli", "show", "-s", "-a", "Password"]
-    return subprocess.run(
+    return vault_session.run_cli(
         [*command, database, entry],
+        database,
         stdin=sys.stdin, stdout=None if native else subprocess.PIPE, check=False,
     )
 
@@ -62,7 +65,7 @@ def show_password(password: bytes) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--show", action="store_true", help="明文显示密码")
@@ -70,7 +73,7 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="重新测试当前终端剪贴板")
     parser.add_argument("database", nargs="?")
     parser.add_argument("entry", nargs="?")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("密码操作仅限交互式终端，拒绝写入文件或管道。", file=sys.stderr)
@@ -100,14 +103,16 @@ def main() -> int:
         print("密码将明文显示在当前终端，可能保留在滚屏记录中。", file=sys.stderr)
 
     try:
+        if args.show and vault_session.current() is not None:
+            vault_session.current().unlock(args.database, fresh=True)
         result = read_entry(args.database, args.entry, args.native)
         if result.returncode:
             entry = select_entry(args.database, args.entry)
             if entry is not None:
                 result = read_entry(args.database, entry, args.native)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         return 130
-    except OSError as exc:
+    except (OSError, vault_session.VaultError) as exc:
         print(f"无法读取密码库: {exc}", file=sys.stderr)
         return 1
     if result.returncode:
@@ -136,6 +141,14 @@ def main() -> int:
     finally:
         write_clipboard("")
     if show:
+        if vault_session.current() is not None:
+            try:
+                vault_session.current().unlock(args.database, fresh=True)
+            except (KeyboardInterrupt, EOFError):
+                return 130
+            except (OSError, vault_session.VaultError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
         return show_password(password)
     return 0
 

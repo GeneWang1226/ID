@@ -239,6 +239,19 @@ class AccountStoreTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][1:3], ["edit", "-p"])
         self.assertNotIn("-u", run.call_args.args[0])
 
+    def test_session_edit_reauthenticates_and_keeps_new_password_out_of_arguments(self):
+        with (patch.object(store.sys, "stdin", Terminal()), patch.object(store.sys, "stdout", Terminal()),
+              patch.object(store.getpass, "getpass", side_effect=["synthetic-master", SECRET]) as prompt,
+              patch.object(store.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run,
+              store.vault_session.session()):
+            self.assertEqual(store.write_entry("alice", "Grouped/GitHub", None, edit=True), 0)
+        self.assertIn("再次验证", prompt.call_args_list[0].args[0])
+        self.assertEqual(run.call_args.kwargs["input"], ("synthetic-master\n" + SECRET + "\n").encode())
+        self.assertEqual(run.call_args.args[0][1:4], ["edit", "-q", "-p"])
+        for call in run.call_args_list:
+            self.assertNotIn(SECRET, str(call.args))
+            self.assertNotIn("synthetic-master", str(call.args))
+
     def test_status_detection_only_requests_titles_and_keeps_unknown_separate(self):
         results = [SimpleNamespace(returncode=0, stdout=text) for text in (
             "Group/\nGroup/Empty\nFilled\nHidden\n", "/Group/Empty\n", "/Filled\n")]
@@ -261,6 +274,14 @@ class AccountStoreTests(unittest.TestCase):
             with self.assertRaises(store.AccountError):
                 store.list_passwords("alice")
         self.assertNotIn("未填密码", output.getvalue())
+
+    def test_failed_session_query_invalidates_cached_unlock(self):
+        with (store.vault_session.session() as session,
+              patch.object(session, "lock") as lock,
+              patch.object(store.vault_session, "run_cli", return_value=SimpleNamespace(returncode=1, stdout="", stderr=""))):
+            with self.assertRaises(store.AccountError):
+                store.password_states("alice")
+            lock.assert_called_once()
 
     def test_list_keeps_accounts_personal_information_and_passwords_separate(self):
         self.import_accounts()
@@ -474,6 +495,20 @@ class AccountStoreTests(unittest.TestCase):
             db.execute("INSERT INTO items(identity,category,key,value) VALUES('alice','account','other@example.com','proton 国外')")
         row = next(row for row in store.account_rows("alice") if row["title"] == "other@example.com")
         self.assertEqual(row["username"], "other@example.com")
+
+    def test_account_label_is_separate_from_username_key_and_password_path(self):
+        self.import_accounts()
+        row = store.info_rows("alice")[0]
+        note = json.loads(row["note"])
+        note["label"] = "邮箱"
+        with contextlib.closing(sqlite3.connect(self.root / "data" / "id.db")) as db, db:
+            db.execute("UPDATE items SET note=? WHERE id=?", (json.dumps(note), row["id"]))
+        store.set_password_link("alice", row["id"], "Accounts/Original title")
+        account = store.account_rows("alice")[0]
+        self.assertEqual(account["name"], "邮箱")
+        self.assertEqual(account["key"], row["key"])
+        self.assertEqual(account["username"], "alice@example.com")
+        self.assertEqual(account["title"], "Accounts/Original title")
 
     def test_generated_commands_preserve_make_dollars_and_shell_quotes(self):
         title = "Team's $(literal) entry"

@@ -140,16 +140,52 @@ class PasswordDisplayTests(unittest.TestCase):
             patch.object(organizer, "call_ai", return_value=draft) as ai,
             patch.object(organizer, "plaintext_allowed", return_value=True),
             patch.object(organizer, "choose_action", return_value="secrets-show") as choose,
-            patch.object(organizer.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run,
+            patch.object(organizer.password_cli, "main", return_value=0) as run,
+            patch.object(organizer.account_store, "vault_for", return_value=Path("demo.kdbx")),
             patch.object(organizer.sys, "stdout", io.StringIO()),
             patch.object(organizer.sys, "stderr", io.StringIO()),
         ):
             self.assertEqual(organizer.main(), 0)
         self.assertIn("secrets-show", dict(choose.call_args.args[0]))
-        self.assertEqual(run.call_args.args[0], ["make", "pass-show", "id=demo", "title=demo"])
-        self.assertNotIn("stdout", run.call_args.kwargs)
-        self.assertNotIn("capture_output", run.call_args.kwargs)
+        self.assertEqual(run.call_args.args[0], ["--show", "--", "demo.kdbx", "demo"])
+        self.assertEqual(run.call_args.kwargs, {})
         self.assertEqual(ai.call_count, 1)
+
+    def test_cached_session_requires_fresh_verification_before_plaintext(self):
+        vault = clipboard.vault_session
+        result = SimpleNamespace(returncode=0, stdout=(PASSWORD + "\n").encode())
+        with (patch.object(clipboard.sys, "stdin", Terminal()), patch.object(clipboard.sys, "stdout", Terminal()) as output,
+              patch.object(clipboard.sys, "stderr", io.StringIO()), patch.object(clipboard, "plaintext_allowed", return_value=True),
+              patch.object(clipboard, "read_entry", return_value=result),
+              patch.object(vault.getpass, "getpass", return_value="synthetic-master") as prompt,
+              patch.object(vault.subprocess, "run", return_value=SimpleNamespace(returncode=0)), vault.session() as session):
+            session.unlock("demo.kdbx")
+            self.assertEqual(clipboard.main(["--show", "demo.kdbx", "demo"]), 0)
+            self.assertEqual(prompt.call_count, 2)
+            self.assertEqual(output.getvalue(), PASSWORD + "\n")
+
+    def test_cached_copy_fallback_reauthenticates_before_showing_plaintext(self):
+        vault = clipboard.vault_session
+        result = SimpleNamespace(returncode=0, stdout=(PASSWORD + "\n").encode())
+        with (patch.object(clipboard.sys, "stdin", Terminal("v\n")), patch.object(clipboard.sys, "stdout", Terminal()) as output,
+              patch.object(clipboard.sys, "stderr", io.StringIO()), patch.object(clipboard, "plaintext_allowed", return_value=True),
+              patch.object(clipboard, "read_entry", return_value=result), patch.object(clipboard, "check_clipboard", return_value="supported"),
+              patch.object(clipboard, "write_clipboard"), patch.object(clipboard.select, "select", return_value=([1], [], [])),
+              patch.object(vault.getpass, "getpass", return_value="synthetic-master") as prompt,
+              patch.object(vault.subprocess, "run", return_value=SimpleNamespace(returncode=0)), vault.session() as session):
+            session.unlock("demo.kdbx")
+            self.assertEqual(clipboard.main(["demo.kdbx", "demo"]), 0)
+            self.assertEqual(prompt.call_count, 2)
+            self.assertEqual(output.getvalue(), PASSWORD + "\n")
+
+    def test_ai_lock_command_is_local_and_not_sent_to_model(self):
+        with (patch.object(organizer.sys, "argv", ["ai-organize.py", "--identity", "demo"]),
+              patch.object(organizer, "read_config", return_value={"AI_API_KEY": "demo"}),
+              patch.object(organizer, "_TTY", False), patch.object(organizer, "read_input", side_effect=["/lock", None]),
+              patch.object(organizer, "call_ai") as ai, patch.object(organizer.sys, "stdout", io.StringIO()) as output):
+            self.assertEqual(organizer.main(), 0)
+            ai.assert_not_called()
+            self.assertIn("已锁定", output.getvalue())
 
     def test_ai_menu_hides_disabled_plaintext(self):
         draft = {"items": [], "events": [], "secrets": [{"title": "demo", "action": "copy"}]}

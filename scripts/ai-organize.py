@@ -17,6 +17,7 @@
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -31,6 +32,8 @@ from pathlib import Path
 from password_entries import infer_secret_title
 from terminal_clipboard import check_clipboard, plaintext_allowed
 from terminal_menu import choose_action
+import account_store
+import vault_session
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG = BASE_DIR / "config" / "config.toml"
@@ -296,6 +299,11 @@ def infer_save_secret(text: str, identity: str) -> dict | None:
     return {"identity": identity, "title": infer_secret_title(text), "kind": "密码", "action": "save"}
 
 
+_password_spec = importlib.util.spec_from_file_location("id_password_cli", BASE_DIR / "scripts" / "pass-ssh.py")
+password_cli = importlib.util.module_from_spec(_password_spec)
+_password_spec.loader.exec_module(password_cli)
+
+
 def launch_secret_entries(secrets: list[dict]) -> list[dict]:
     added = []
     for secret in secrets:
@@ -303,16 +311,14 @@ def launch_secret_entries(secrets: list[dict]) -> list[dict]:
         title = str(secret.get("title") or "")
         print(dim(f"\n正在打开：make pass-add-manual id={shlex.quote(identity)} title={shlex.quote(title)}"))
         try:
-            result = subprocess.run(
-                ["make", "pass-add-manual", f"id={identity}", f"title={title}"],
-                cwd=BASE_DIR,
-                check=False,
-            )
-        except OSError as exc:
+            result = account_store.fill_passwords(identity, title)
+        except (OSError, account_store.AccountError, vault_session.VaultError) as exc:
             print(warn(f"无法启动密码录入: {exc}"), file=sys.stderr)
             continue
-        if result.returncode:
-            print(warn(f"密码录入已结束（退出码 {result.returncode}）。"), file=sys.stderr)
+        except (KeyboardInterrupt, EOFError):
+            continue
+        if result:
+            print(warn(f"密码录入已结束（退出码 {result}）。"), file=sys.stderr)
         else:
             added.append(secret)
     return added
@@ -325,13 +331,16 @@ def copy_secret_entries(secrets: list[dict], show: bool = False) -> list[dict]:
         identity = str(secret.get("identity") or "")
         title = str(secret.get("title") or "")
         print(dim(f"\n正在打开：make {target} id={shlex.quote(identity)} title={shlex.quote(title)}"))
-        result = subprocess.run(
-            ["make", target, f"id={identity}", f"title={title}"],
-            cwd=BASE_DIR,
-            check=False,
-        )
-        if result.returncode:
-            print(warn(f"密码操作未完成（退出码 {result.returncode}）。"), file=sys.stderr)
+        try:
+            database = account_store.vault_for(identity)
+            result = password_cli.main([*(["--show"] if show else []), "--", str(database), title])
+        except (OSError, account_store.AccountError, vault_session.VaultError) as exc:
+            print(warn(str(exc)), file=sys.stderr)
+            result = 1
+        except (KeyboardInterrupt, EOFError):
+            result = 130
+        if result:
+            print(warn(f"密码操作未完成（退出码 {result}）。"), file=sys.stderr)
             print(
                 warn(
                     f"请检查解锁结果和终端提示；条目标题不匹配时，可运行 "
@@ -370,6 +379,7 @@ def write_draft(items: list[dict], events: list[dict]) -> None:
     print(ok(f"✓ 已写入: {len(items)} 条 items, {len(events)} 条 events。"))
 
 
+@vault_session.session()
 def main() -> int:
     parser = argparse.ArgumentParser(description="AI 整理资料写入 SQLite 草稿")
     parser.add_argument("--identity", "-i", help="归属身份（建议必填；缺则在终端询问）")
@@ -401,6 +411,20 @@ def main() -> int:
 
     first_text = Path(args.file).read_text() if args.file else None
     history = []
+    if _TTY and not args.file:
+        try:
+            database = account_store.vault_for(identity)
+        except account_store.AccountError:
+            database = None
+        if database is not None:
+            try:
+                vault_session.current().unlock(database)
+            except (KeyboardInterrupt, EOFError):
+                print("\n已取消。", file=sys.stderr)
+                return 0
+            except (OSError, vault_session.VaultError) as exc:
+                print(err(str(exc)), file=sys.stderr)
+                return 1
     while True:
         if first_text is not None:
             text = first_text
@@ -410,6 +434,10 @@ def main() -> int:
             if text is None:
                 return 0
         text = text.strip()
+        if text == "/lock":
+            vault_session.current().lock()
+            print(dim("密码库已锁定，下次密码操作需要重新解锁。"))
+            continue
         if not text:
             print(err("错误: 没有输入内容"), file=sys.stderr)
             if args.file:

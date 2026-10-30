@@ -73,6 +73,8 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 
 ### 临时凭证（AI 代执行密码）
 
+交互式 `make ai` / `make list` 的主密码缓存由 `scripts/vault_session.py` 管理，仅在同一进程中复用，不跨独立命令或终端。切换库、退出会话和 AI `/lock` 会清除缓存；空闲 5 分钟后再次使用需解锁。明文显示和修改已有密码强制重新验证。该缓存不替代 `make grant` 的 AI 授权机制，主密码不会提供给模型。
+
 `make grant` 把某条目的密码提取成临时凭证，AI 用 `make use` 代执行命令而不见明文（机制与分级 Tags 见 [GUIDE.md](GUIDE.md) 场景四）。维护要点：
 
 - 凭证在 `${XDG_RUNTIME_DIR:-/run/user/<uid>}/id-grants/`，tmpfs，**重启即清空**；目录权限 700，文件 600
