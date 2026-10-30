@@ -20,7 +20,7 @@ PR := \033[36m
 N  := \033[0m
 endif
 
-.PHONY: help check settings new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help check settings clipboard-check new passwd pass pass-show pass-list pass-add pass-add-manual grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@e=""; [ -t 1 ] && e=$$(printf '\033'); \
@@ -31,8 +31,11 @@ help: ## 显示本帮助
 check: ## 安全自检（ignore 规则/追踪/权限/明文扫描），提交或同步前跑一遍
 	@scripts/security-check.sh
 
-settings: ## 方向键修改 AI 设置，并可隐藏输入 API key
+settings: ## 方向键修改 AI 设置、API key 和全局明文权限
 	@scripts/settings.py
+
+clipboard-check: ## 重新自测当前 SSH 终端的本地剪贴板（只用测试文字）
+	@scripts/pass-ssh.py --check
 
 new: ## 新增身份（id=gene）
 	@v="$(id)"; [ -n "$$v" ] || read -p "$$(printf '$(PR)身份名: $(N)')" v; \
@@ -44,21 +47,21 @@ passwd: ## 修改某身份 kdbx 主密码（id=gene）
 	[ -n "$$v" ] || { printf '$(ER)错误: 身份名不能为空$(N)\n' >&2; exit 1; }; \
 	keepassxc-cli db-edit --set-password "identities/$$v/passwords/$$v.kdbx"
 
-pass: ## 复制密码到剪贴板，10 秒后自动清空（SSH 用 OSC 52；id=gene title="..."）
+pass: ## 复制密码（SSH 可按 v 回退明文；id=gene title="..."）
 	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	if [ -n "$${SSH_CONNECTION:-}" ]; then \
-		scripts/pass-ssh.py "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
+		scripts/pass-ssh.py -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
 	else \
 		keepassxc-cli clip "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
 	fi
 
-pass-show: ## 显示整条记录（id=gene title="..."）
+pass-show: ## 明文显示密码，仅限交互终端（id=gene title="..."）
 	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
 	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	keepassxc-cli show "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
+	scripts/pass-ssh.py --show -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
 pass-list: ## 列出某身份 kdbx 里所有条目（id=gene）
 	@iv="$(id)"; [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \

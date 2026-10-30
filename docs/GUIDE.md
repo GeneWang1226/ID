@@ -12,8 +12,9 @@
 | --- | --- |
 | `make new id=gene` | 新增身份 |
 | `make passwd id=gene` | 修改某身份 kdbx 主密码 |
-| `make pass id=gene title="..."` | 复制密码到剪贴板（10 秒后自动清空；SSH 会通过 OSC 52 写入本地终端） |
-| `make pass-show id=gene title="..."` | 显示整条记录（无桌面/剪贴板时用） |
+| `make pass id=gene title="..."` | 复制密码；SSH 复制无效时输入 `v`、Enter 回退明文显示 |
+| `make pass-show id=gene title="..."` | 在当前交互终端明文显示密码，会留在终端记录 |
+| `make clipboard-check` | 重新测试当前 SSH 连接的本地剪贴板，只使用测试文字 |
 | `make pass-list id=gene` | 列出该身份 kdbx 里所有条目 |
 | `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
 | `make pass-add-manual id=gene title="..."` | 新增条目，手动输入密码 |
@@ -25,7 +26,7 @@
 | `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
 | `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
 | `make event id=gene` | 记事件（逐个询问标题/详情） |
-| `make settings` | 修改非敏感 AI 设置，并可隐藏修改 API key |
+| `make settings` | 修改 AI 设置、API key，以及全局“明文显示密码”权限 |
 | `make ai id=jacob` / `make ai id=jacob file=资料.txt` | AI 整理资料（**先指定身份**；交互模式空行提交，显示 `AI ›` 回复与草稿，确认后才写 SQLite；不写 kdbx，不涉及主密码） |
 | `make check` | 安全自检（提交/同步前必跑） |
 | `make status` | 身份、条目数、Web 状态总览 |
@@ -64,7 +65,15 @@ make new id=gene
 
 新设备先执行 `cp config/secrets/.secrets.env.example config/secrets/.secrets.env && chmod 600 config/secrets/.secrets.env`，再运行 `make settings` 输入 API key。旧 `docker/.env` 中的 `ai_api_key` 和 `kdbx_initial_password` 迁移到 `config/secrets/.secrets.env` 后即可删除旧值；兼容读取只用于过渡。
 
-保存密码后，下一步可选择“复制刚保存的密码到剪贴板”，等价于执行 `make pass id=gene title="GitHub 账户密码"`；密码不会打印到终端，剪贴板按现有规则自动清空。再次运行 `make settings` 即可热加载修改后的 `config/config.toml`，无需重启 CLI；Web 使用同一份非敏感配置。
+首次在 SSH 连接中运行 `make ai` 或复制密码时，会做一次剪贴板自测：发送无敏感的测试文字，请你粘贴到隐藏输入框并按 Enter；不能粘贴就直接 Enter，`q` 可跳过。测试会覆盖当前剪贴板。未通过或跳过时，程序先显示全局提示；未通过时不再向该连接尝试发送密码，AI 菜单改为提供明文查看（须已允许）。自测不解锁密码库，不查询本地剪贴板内容，也不会保存粘贴的文字。仅缓存本次连接的检测结果，换一个 SSH 连接会重新检测；可随时运行 `make clipboard-check` 重测。
+
+保存密码后，下一步可选择“复制刚保存的密码到剪贴板”，等价于执行 `make pass id=gene title="GitHub 账户密码"`。SSH 下会发送 OSC 52 复制请求，请在 10 秒内粘贴，之后发送清空请求。复制无效时，在同一提示中输入 `v` 并按 Enter 即可明文显示，不需要退出 SSH 或另开本地管道。直接 Enter、超时或 Ctrl+C 都不会显示明文。自测成功只确认当时可用，不能保证每次复制均成功。
+
+AI 菜单也可直接选择“明文显示密码”，等价于 `make pass-show id=gene title="GitHub 账户密码"`。明文只显示在当前终端，不回传给模型，不写入 AI 对话或项目日志，但可能保留在终端滚屏或外部会话录制中。两种显示入口均拒绝非交互式终端和输出重定向。
+
+**随时撤销明文权限**：`make settings` → “明文显示密码”切换为“禁止” → 保存并退出。设置写入 `config/config.toml` 的 `[terminal].allow_plaintext`；AI 菜单、`make pass-show` 和 `v` 回退都受这个开关控制。显示前会重新读取配置，因此已打开的会话也会遵守撤销。关闭开关不能清除已经显示过的终端记录；配置缺失或无效时默认禁止明文显示。
+
+再次运行 `make settings` 即可热加载修改后的 `config/config.toml`，无需重启 CLI；Web 使用同一份非敏感配置。
 
 - 云端 API（默认阿里云百炼 `qwen-plus`）：整理质量稳，但**只发非机密资料，绝不粘贴密码/授权码/助记词**
 - 本地模型：运行 `make settings` 把接口改为 `http://localhost:11434/v1`、模型改为 `qwen3:8b`（需先装 Ollama），数据不出机，但小服务器上较慢

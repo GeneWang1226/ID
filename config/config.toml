@@ -5,3 +5,6 @@ base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 model = "qwen3.8-max"
 thinking = false
 thinking_budget = 8192
+
+[terminal]
+allow_plaintext = true

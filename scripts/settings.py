@@ -2,6 +2,7 @@
 """用方向键修改非敏感设置，API key 通过隐藏输入单独保存。"""
 
 import getpass
+import json
 import os
 import sys
 import tempfile
@@ -19,6 +20,7 @@ DEFAULTS = {
     "model": "qwen-plus",
     "thinking": False,
     "thinking_budget": 8192,
+    "allow_plaintext": False,
 }
 
 
@@ -34,7 +36,9 @@ def load() -> dict:
     with CONFIG.open("rb") as f:
         data = tomllib.load(f)
     values = data.get("ai", {})
-    return {key: values.get(key, value) for key, value in DEFAULTS.items()}
+    settings = {key: values.get(key, value) for key, value in DEFAULTS.items()}
+    settings["allow_plaintext"] = data.get("terminal", {}).get("allow_plaintext") is True
+    return settings
 
 
 def update_secret(key: str, value: str) -> None:
@@ -70,10 +74,12 @@ def save_config(values: dict) -> None:
     content = (
         "# 可同步的非敏感配置。make ai / Web 每次调用都会重新读取。\n\n"
         "[ai]\n"
-        f"base_url = {values['base_url']!r}\n"
-        f"model = {values['model']!r}\n"
+        f"base_url = {json.dumps(values['base_url'], ensure_ascii=False)}\n"
+        f"model = {json.dumps(values['model'], ensure_ascii=False)}\n"
         f"thinking = {str(bool(values['thinking'])).lower()}\n"
         f"thinking_budget = {int(values['thinking_budget'])}\n"
+        "\n[terminal]\n"
+        f"allow_plaintext = {str(bool(values['allow_plaintext'])).lower()}\n"
     )
     fd, tmp_name = tempfile.mkstemp(prefix=".config.toml.", dir=CONFIG.parent)
     try:
@@ -125,6 +131,7 @@ def render(values: dict, selected: int, key_configured: bool) -> None:
         f"AI 模型          {values['model']}",
         f"思考模式         {'● 开   ○ 关' if thinking else '○ 开   ● 关'}",
         f"思考预算         {values['thinking_budget']} token",
+        f"明文显示密码     {'● 允许   ○ 禁止' if values['allow_plaintext'] else '○ 允许   ● 禁止'}",
         "保存并退出",
         "取消",
     ]
@@ -188,6 +195,8 @@ def main() -> int:
                     except ValueError:
                         say("思考预算必须是正整数。")
                 elif selected == 5:
+                    values["allow_plaintext"] = not values["allow_plaintext"]
+                elif selected == 6:
                     if pending_key is not None:
                         update_secret("AI_API_KEY", pending_key)
                     save_config(values)
@@ -201,12 +210,12 @@ def main() -> int:
             if key == b"\x1b":
                 sequence = os.read(fd, 2)
                 if sequence == b"[A":
-                    selected = (selected - 1) % 7
+                    selected = (selected - 1) % 8
                 elif sequence == b"[B":
-                    selected = (selected + 1) % 7
+                    selected = (selected + 1) % 8
                 render(values, selected, key_configured)
             elif key in (b"k", b"j"):
-                selected = (selected - 1 if key == b"k" else selected + 1) % 7
+                selected = (selected - 1 if key == b"k" else selected + 1) % 8
                 render(values, selected, key_configured)
     except (KeyboardInterrupt, OSError):
         say("已取消，未保存 config/config.toml。")

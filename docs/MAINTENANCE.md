@@ -80,6 +80,18 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 - 条目的 `ai-auto` / `ai-deny` 标签用 `make tag id=<身份> title=<条目> tags=<标签>` 打（`tags=` 留空则清除）；也可在 KeePassXC 图形客户端打，标签随 kdbx 经 Syncthing 同步。`tag-entry.sh` 通过 XML 导出/注入/导入实现，会重建数据库——条目和附件保留，但数据库级的自定义设置（如加密参数）如有改动需自行复查
 - 日志只记「何时授权/使用了哪个条目」，出现泄露疑虑时 `grep grant logs/scripts.log` 核对后 `make revoke all=1`
 
+### SSH 终端剪贴板与明文权限
+
+SSH 连接首次使用 AI 或剪贴板时会要求粘贴测试文字；结果仅按当前连接缓存到 `config/.cache/clipboard/`，不进 git 或 Syncthing，不保存剪贴板内容。切换 SSH 客户端或 tmux 客户端会使用独立结果。运行 `make clipboard-check` 可强制重测。
+
+`make settings` 中的“明文显示密码”是全局权限，关闭后禁止所有项目明文入口，显示前会重新读取设置。该开关不会清除已有终端滚屏或外部会话录制。
+
+回归检查无需接触真实密码库：
+
+```bash
+python3 -m unittest discover -s scripts/tests -v
+```
+
 ### 修改模板
 
 直接编辑 `~/ID/template/` 下的目录和文件。**改动只影响之后新建的身份**，已有身份保持原样。

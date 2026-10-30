@@ -14,6 +14,7 @@ identities/
 .secrets.env
 docker/.env
 config/secrets/.secrets.env
+config/.cache/
 
 # 脚本操作日志
 logs/

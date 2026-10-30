@@ -28,6 +28,8 @@ import tomllib
 import urllib.request
 from pathlib import Path
 
+from terminal_clipboard import check_clipboard, plaintext_allowed
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG = BASE_DIR / "config" / "config.toml"
 SECRETS = BASE_DIR / "config" / "secrets" / ".secrets.env"
@@ -339,23 +341,24 @@ def launch_secret_entries(secrets: list[dict]) -> list[dict]:
     return added
 
 
-def copy_secret_entries(secrets: list[dict]) -> list[dict]:
+def copy_secret_entries(secrets: list[dict], show: bool = False) -> list[dict]:
     failed = []
+    target = "pass-show" if show else "pass"
     for secret in secrets:
         identity = str(secret.get("identity") or "")
         title = str(secret.get("title") or "")
-        print(dim(f"\n正在复制：make pass id={shlex.quote(identity)} title={shlex.quote(title)}"))
+        print(dim(f"\n正在打开：make {target} id={shlex.quote(identity)} title={shlex.quote(title)}"))
         result = subprocess.run(
-            ["make", "pass", f"id={identity}", f"title={title}"],
+            ["make", target, f"id={identity}", f"title={title}"],
             cwd=BASE_DIR,
             check=False,
         )
         if result.returncode:
-            print(warn(f"密码复制已结束（退出码 {result.returncode}）。"), file=sys.stderr)
+            print(warn(f"密码操作未完成（退出码 {result.returncode}）。"), file=sys.stderr)
             print(
                 warn(
-                    f"未找到条目 {title!r}；可先运行 make pass-list id={shlex.quote(identity)} 查看标题，"
-                    f"或执行 make pass-add-manual id={shlex.quote(identity)} title={shlex.quote(title)} 新增。"
+                    f"请检查解锁结果和终端提示；条目标题不匹配时，可运行 "
+                    f"make pass-list id={shlex.quote(identity)} 查看实际标题。"
                 ),
                 file=sys.stderr,
             )
@@ -475,6 +478,7 @@ def main() -> int:
             print(err("错误: 请指定身份，例如 make ai id=jacob"), file=sys.stderr)
             return 1
 
+    clipboard_status = check_clipboard() if _TTY and not args.file else "unknown"
     cfg = read_config()
     api_key = cfg.get("AI_API_KEY", "")
     base_url = cfg.get("ai_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
@@ -585,19 +589,27 @@ def main() -> int:
         else:
             print(dim("（无）"))
 
+        allow_plaintext = plaintext_allowed()
         if secrets:
             has_copy = any(s.get("action") == "copy" for s in secrets)
-            heading = "===== 机密操作（不读取明文）=====" if has_copy else "===== 机密提醒（不写入，需手动存 kdbx）====="
+            heading = "===== 密码操作 =====" if has_copy else "===== 机密提醒（不写入，需手动存 kdbx）====="
             print("\n" + warn(heading))
-            print(warn("AI 不会读取、打印或写入密码内容；查看请求只调用本地命令，保存请求由你在终端输入密码。"))
+            print(warn("密码由本地 KeePassXC 处理，不发送给模型；选择明文显示会留在终端记录。"))
             for i, s in enumerate(secrets, 1):
                 sid = str(s.get("identity") or identity)
                 title = str(s.get("title") or "")
                 kind = str(s.get("kind") or "")
                 action = str(s.get("action") or "save")
                 if action == "copy":
-                    command = f"make pass id={shlex.quote(sid)} title={shlex.quote(title)}"
-                    suffix = "（复制已有条目到剪贴板）"
+                    if clipboard_status == "unavailable":
+                        command = (
+                            f"make pass-show id={shlex.quote(sid)} title={shlex.quote(title)}"
+                            if allow_plaintext else "make clipboard-check"
+                        )
+                        suffix = "（明文显示）" if allow_plaintext else "（明文已禁用，请重新检测剪贴板）"
+                    else:
+                        command = f"make pass id={shlex.quote(sid)} title={shlex.quote(title)}"
+                        suffix = "（复制已有条目到剪贴板）"
                 else:
                     command = f"make pass-add-manual id={shlex.quote(sid)} title={shlex.quote(title)}"
                     suffix = "（新增条目并手动录入）"
@@ -608,7 +620,7 @@ def main() -> int:
                     )
                 )
 
-        if not items and not events:
+        if not items and not events and not secrets:
             print("\n" + dim("没有可写入 SQLite 的条目/事件。"))
             if reply:
                 print(dim("原因见上方「AI ›」回复。"))
@@ -627,7 +639,10 @@ def main() -> int:
         if save_secrets:
             options.append(("secrets-save", "新增并录入密码"))
         if copy_secrets:
-            options.append(("secrets-copy", "复制已有密码到剪贴板"))
+            if clipboard_status != "unavailable":
+                options.append(("secrets-copy", "复制已有密码到剪贴板"))
+            if allow_plaintext:
+                options.append(("secrets-show", "明文显示密码（会留在终端记录）"))
         if items or events:
             options.append(("write", f"确认写入 SQLite（身份 {identity}）"))
         options.extend([("continue", "继续向 AI 提问"), ("exit", "退出" )])
@@ -635,17 +650,23 @@ def main() -> int:
         if action == "secrets-save":
             added = launch_secret_entries(save_secrets)
             if added:
-                copy_action = choose_action(
-                    [
-                        ("copy", "复制刚保存的密码到剪贴板"),
-                        ("continue", "继续向 AI 提问"),
-                    ]
-                )
+                options = []
+                if clipboard_status != "unavailable":
+                    options.append(("copy", "复制刚保存的密码到剪贴板"))
+                if plaintext_allowed():
+                    options.append(("show", "明文显示密码（会留在终端记录）"))
+                options.append(("continue", "继续向 AI 提问"))
+                copy_action = choose_action(options)
                 if copy_action == "copy":
                     copy_secret_entries(added)
+                elif copy_action == "show":
+                    copy_secret_entries(added, show=True)
             continue
         if action == "secrets-copy":
             copy_secret_entries(copy_secrets)
+            continue
+        if action == "secrets-show":
+            copy_secret_entries(copy_secrets, show=True)
             continue
         if action == "write":
             write_draft(items, events)

@@ -15,7 +15,7 @@
 | `identities/` | 所有身份目录，每个身份一个子目录（如 `identities/gene/`） |
 | `scripts/` | 工具脚本，如 `add-identity.sh` |
 | `Makefile` | 常用操作入口，`make help` 查看 |
-| `config/config.toml` | 可同步的非敏感配置：AI 接口、模型、思考开关 |
+| `config/config.toml` | 可同步的非敏感配置：AI 接口、模型、思考开关、全局明文权限 |
 | `config/secrets/.secrets.env` / `config/secrets/.secrets.env.example` | 敏感配置：AI API key、KDBX 初始密码（真实文件权限 600，不进 git） |
 | `docker/.env` / `docker/.env.example` | Docker 配置：Web 访问密码（真实文件权限 600，不进 git，模板入库） |
 | `assets/` | 工具安装包（KeePassXC 各平台客户端等），只放安装包、不放身份数据 |
