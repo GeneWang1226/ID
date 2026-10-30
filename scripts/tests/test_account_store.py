@@ -257,25 +257,84 @@ class AccountStoreTests(unittest.TestCase):
                 store.list_passwords("alice")
         self.assertNotIn("未填密码", output.getvalue())
 
-    def test_table_separates_empty_passwords_and_unlinked_accounts_with_commands(self):
+    def test_list_keeps_personal_information_and_passwords_in_separate_sections(self):
         self.import_accounts()
-        with (patch.object(store, "password_states", return_value={"GitHub": "已设置", "服务器/空条目": "未填密码"}),
-              contextlib.redirect_stdout(Terminal()) as output):
-            self.assertEqual(store.list_passwords("alice"), 0)
-        text = output.getvalue()
-        for label in ("条目 / 账号", "密码状态", "已设置", "未填密码", "未关联条目"):
-            self.assertIn(label, text)
-        self.assertIn("make pass-edit id=alice title='服务器/空条目'", text)
-        self.assertIn("make pass-add-manual id=alice", text)
-        self.assertIn("user=alice@example.com", text)
-        self.assertNotIn("other@example.net", text)
+        captured = []
 
-    def test_chinese_table_alignment_uses_terminal_cell_width(self):
-        with contextlib.redirect_stdout(Terminal()) as output:
-            store.print_status_table([("中文账号", "已设置", "修改 [1]"), ("GitHub", "未填密码", "补填 [2]")])
-        lines = output.getvalue().splitlines()
-        starts = [store.cell_width(line[:line.index(label)]) for line, label in zip(lines, ("密码状态", "已设置", "未填密码"))]
-        self.assertEqual(len(set(starts)), 1)
+        def choose(browser):
+            captured.extend(browser.load(browser.view))
+            return None
+
+        with (patch.object(store, "password_states", return_value={"GitHub": "已设置", "服务器/空条目": "未填密码"}),
+              patch.object(store.RecordBrowser, "choose", new=choose), contextlib.redirect_stdout(Terminal()) as output):
+            self.assertEqual(store.list_records("alice"), 0)
+        self.assertEqual([row["kind"] for row in captured], ["password", "password", "info"])
+        self.assertEqual(captured[-1]["value"], "alice@example.com")
+        self.assertNotIn("make pass-add-manual", output.getvalue())
+
+    def test_info_filter_never_unlocks_or_requires_a_password_vault(self):
+        self.import_accounts()
+        (self.root / "identities" / "alice" / "passwords" / "alice.kdbx").unlink()
+        captured = []
+
+        def choose(browser):
+            captured.extend(browser.load(browser.view))
+            return None
+
+        with (patch.object(store, "password_states") as states, patch.object(store.RecordBrowser, "choose", new=choose),
+              patch.object(store.shutil, "which", return_value=None), patch.object(store.sys, "stdin", Terminal()),
+              patch.object(store.sys, "stdout", Terminal()),
+              patch.object(store.sys, "argv", ["account_store.py", "list", "--identity", "alice", "--type", "info"])):
+            self.assertEqual(store.main(), 0)
+        states.assert_not_called()
+        self.assertEqual({row["kind"] for row in captured}, {"info"})
+
+    def test_legacy_pass_list_contains_only_actual_vault_entries(self):
+        self.import_accounts()
+        captured = []
+
+        def choose(browser):
+            captured.extend(browser.load(browser.view))
+            return None
+
+        with patch.object(store, "password_states", return_value={"GitHub": "已设置"}), patch.object(store.RecordBrowser, "choose", new=choose):
+            store.list_passwords("alice")
+        self.assertEqual([(row["kind"], row["title"]) for row in captured], [("password", "GitHub")])
+
+    def test_links_are_scoped_to_identity_and_preserve_personal_data(self):
+        self.import_accounts({"待确认": "bob"})
+        before = self.account()
+        own = store.info_rows("alice")[0]
+        other = store.info_rows("bob")[0]
+        store.set_password_link("alice", own["id"], "/Logins/GitHub")
+        self.assertEqual(store.info_rows("alice")[0]["link"], "Logins/GitHub")
+        self.assertIsNone(store.info_rows("bob")[0]["link"])
+        with self.assertRaises(store.AccountError):
+            store.set_password_link("alice", other["id"], "Logins/GitHub")
+        self.assertEqual(self.account(), before)
+        self.assertEqual(store.account_rows("alice")[0]["title"], "Logins/GitHub")
+        store.set_password_link("alice", own["id"], None)
+        self.assertIsNone(store.info_rows("alice")[0]["link"])
+        self.assertEqual(self.account(), before)
+
+    def test_link_action_persists_without_reading_or_modifying_passwords(self):
+        self.import_accounts()
+        row = store.info_rows("alice")[0]
+        with (patch.object(store.RecordBrowser, "choose", side_effect=[row, {"kind": "password", "title": "Logins/GitHub"}, None]),
+              patch.object(store, "choose_action", return_value="link"),
+              patch.object(store, "password_states", return_value={"Logins/GitHub": "已设置"}),
+              patch.object(store, "write_entry") as write,
+              contextlib.redirect_stdout(Terminal())):
+            self.assertEqual(store.list_records("alice", "info"), 0)
+        write.assert_not_called()
+        self.assertEqual(store.info_rows("alice")[0]["link"], "Logins/GitHub")
+
+    def test_legacy_email_metadata_is_not_used_as_username(self):
+        self.import_accounts()
+        with contextlib.closing(sqlite3.connect(self.root / "data" / "id.db")) as db, db:
+            db.execute("INSERT INTO items(identity,category,key,value) VALUES('alice','account','other@example.com','proton 国外')")
+        row = next(row for row in store.account_rows("alice") if row["title"] == "other@example.com")
+        self.assertEqual(row["username"], "other@example.com")
 
     def test_generated_commands_preserve_make_dollars_and_shell_quotes(self):
         title = "Team's $(literal) entry"

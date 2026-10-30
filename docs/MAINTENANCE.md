@@ -100,6 +100,8 @@ python3 -m unittest discover -s scripts/tests -v
 
 所有身份共用一个 SQLite 库 `./data/id.db`，用 `identity` 列区分。首次启动 Web 界面时自动从 `template/data/schema.sql` 初始化。
 
+`make list` 的资料关联保存在同一库的 `password_links` 表，首次关联时自动创建。它只保存资料 ID 和本身份的 KDBX 条目路径，不存密码；新增关联不会改写 `items` 中的资料。关联随 SQLite 同步，KDBX 条目改名或移动后需在列表中重新关联。`make list type=info` 只读 SQLite，无需解锁密码库。
+
 **启动 Web 界面：**
 
 ```bash

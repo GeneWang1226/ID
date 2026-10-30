@@ -17,11 +17,11 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import unicodedata
 import xml.etree.ElementTree as ET
 from zipfile import BadZipFile, ZipFile
 
 from terminal_menu import choose_action
+from terminal_list import RecordBrowser, color
 
 ROOT = Path(__file__).resolve().parents[1]
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -178,8 +178,6 @@ def attach_source(database: Path, title: str, account: str, note: dict) -> bool:
 def require_terminal() -> None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise AccountError("请在自己的交互终端操作；密码输入不经过 AI，输出不写入管道或文件。")
-    if shutil.which("keepassxc-cli") is None:
-        raise AccountError("请先安装 KeePassXC（Debian/Ubuntu：sudo apt install keepassxc）。")
 
 
 def select_identity(identity: str | None) -> str | None:
@@ -191,11 +189,14 @@ def select_identity(identity: str | None) -> str | None:
         if selected == "exit":
             return None
         identity = names[int(selected)]
-    vault_for(identity)
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", identity) or not (ROOT / "identities" / identity).is_dir():
+        raise AccountError("身份不存在。")
     return identity
 
 
 def vault_for(identity: str) -> Path:
+    if shutil.which("keepassxc-cli") is None:
+        raise AccountError("请先安装 KeePassXC（Debian/Ubuntu：sudo apt install keepassxc）。")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", identity):
         raise AccountError("身份名无效。")
     vault = ROOT / "identities" / identity / "passwords" / (identity + ".kdbx")
@@ -204,25 +205,59 @@ def vault_for(identity: str) -> Path:
     return vault
 
 
-def account_rows(identity: str) -> list[dict]:
+def info_rows(identity: str) -> list[dict]:
     database = ROOT / "data" / "id.db"
     if not database.exists():
         return []
     with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as db:
-        rows = db.execute("SELECT key,value,note FROM items WHERE identity=? AND category='account' ORDER BY key", (identity,)).fetchall()
+        db.row_factory = sqlite3.Row
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='items'").fetchone():
+            return []
+        rows = [dict(row) for row in db.execute("SELECT id,category,key,value,note FROM items WHERE identity=? ORDER BY category,key", (identity,))]
+        links = {}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='password_links'").fetchone():
+            links = dict(db.execute("SELECT l.item_id,l.entry_path FROM password_links l JOIN items i ON i.id=l.item_id WHERE i.identity=?", (identity,)))
+        for row in rows:
+            row.update(kind="info", link=links.get(row["id"]))
+        return rows
+
+
+def set_password_link(identity: str, item_id: int, path: str | None) -> None:
+    if path is not None and (not path.strip("/") or not path.isprintable()):
+        raise AccountError("密码条目路径无效。")
+    with closing(sqlite3.connect(ROOT / "data" / "id.db")) as db:
+        db.execute("PRAGMA foreign_keys=ON")
+        if not db.execute("SELECT 1 FROM items WHERE id=? AND identity=?", (item_id, identity)).fetchone():
+            raise AccountError("该资料不属于当前身份。")
+        db.execute("""CREATE TABLE IF NOT EXISTS password_links (
+            item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+            entry_path TEXT NOT NULL)""")
+        with db:
+            if path is None:
+                db.execute("DELETE FROM password_links WHERE item_id=?", (item_id,))
+            else:
+                db.execute("INSERT INTO password_links VALUES(?,?) ON CONFLICT(item_id) DO UPDATE SET entry_path=excluded.entry_path",
+                           (item_id, path.lstrip("/")))
+
+
+def account_rows(identity: str) -> list[dict]:
     accounts = []
-    for key, username, raw in rows:
+    for row in info_rows(identity):
+        if row["category"] != "account":
+            continue
+        key, username, raw = row["key"], row["value"], row["note"]
         try:
             note = json.loads(raw)
         except (TypeError, ValueError):
             note = {}
         if not isinstance(note, dict):
             note = {}
-        title = note.get("password_title") or key
-        username = note.get("username", username)
+        title = row["link"] or note.get("password_title") or key
+        email_key = ":" not in key and re.fullmatch(r"[^@\s/\\]+@[^@\s/\\]+\.[^@\s/\\]+", key)
+        username = note.get("username", key if email_key else username)
         if not isinstance(title, str) or not isinstance(username, str) or not title.strip():
             raise AccountError("账号的标题或用户名格式无效。")
-        accounts.append({"title": title, "username": username, "note": note})
+        accounts.append({"id": row["id"], "title": title, "username": username, "note": note})
     return accounts
 
 
@@ -242,12 +277,15 @@ def fill_passwords(identity: str | None, title: str | None = None, username: str
         return 130
     accounts = account_rows(identity)
     if title:
+        match = next((row for row in accounts if row["title"] == title), None)
         if username is None:
-            match = next((row for row in accounts if row["title"] == title), None)
             username = match["username"] if match else input("用户名（可空）: ").strip()
-        return write_entry(identity, title, username)
+        result = write_entry(identity, title, username)
+        if not result and match:
+            set_password_link(identity, match["id"], title)
+        return result
     completed = set()
-    print("选择已登记账号可预填标题和用户名，也可自定义条目；密码由 KeePassXC 隐藏输入。")
+    print("选择账号或自定义条目。")
     while True:
         selected = choose_action([(str(i), ("✓ 本次已完成 · " if row["title"] in completed else "") + safe_text(row["title"]))
                                   for i, row in enumerate(accounts)] + [("new", "自定义条目（填写标题和用户名）"), ("exit", "退出")],
@@ -273,6 +311,7 @@ def fill_passwords(identity: str | None, title: str | None = None, username: str
                 print("未保存密码；如已存在同名条目，请明确选择更新。")
                 continue
             print("密码已保存到当前身份的 KeePass 数据库。")
+            set_password_link(identity, row["id"], title)
         try:
             if note.get("type") != "mail-account" or attach_source(vault_for(identity), title, name, note):
                 completed.add(title)
@@ -282,7 +321,7 @@ def fill_passwords(identity: str | None, title: str | None = None, username: str
 
 def password_states(identity: str) -> dict[str, str]:
     vault = vault_for(identity)
-    master = getpass.getpass(f"解锁 {identity} 的密码库（不回显）: ") + "\n"
+    master = getpass.getpass(f"{identity} · 主密码: ") + "\n"
     try:
         # KeePassXC 在内部检查密码；stdout 始终只有条目路径，不导出密码。
         def query(command):
@@ -308,26 +347,6 @@ def safe_text(value: str) -> str:
     return "".join(char if char.isprintable() else "?" for char in value)
 
 
-def cell_width(value: str) -> int:
-    return sum(0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in value)
-
-
-def print_status_table(rows: list[tuple[str, str, str]]) -> None:
-    headers = ("条目 / 账号", "密码状态", "操作")
-    name_width = min(48, max(12, shutil.get_terminal_size((100, 24)).columns - 34))
-    table = [headers]
-    for name, status, action in rows:
-        name = safe_text(name)
-        if cell_width(name) > name_width:
-            while cell_width(name) > name_width - 1:
-                name = name[:-1]
-            name += "…"
-        table.append((name, status, action))
-    widths = [max(cell_width(row[i]) for row in table) for i in range(3)]
-    for row in table:
-        print("  ".join(value + " " * (widths[i] - cell_width(value)) for i, value in enumerate(row)).rstrip())
-
-
 def entry_command(target: str, identity: str, title: str, username: str | None = None) -> str:
     values = {"id": identity, "title": title}
     if username is not None:
@@ -337,31 +356,87 @@ def entry_command(target: str, identity: str, title: str, username: str | None =
     return "make " + target + " " + " ".join(f"{key}={shlex.quote(value.replace('$', '$$'))}" for key, value in values.items())
 
 
-def list_passwords(identity: str) -> int:
-    states = password_states(identity)
-    rows, commands = [], []
-    for title, status in states.items():
-        commands.append(entry_command("pass-edit", identity, title))
-        rows.append((title, status, ("补填" if status == "未填密码" else "修改") + f" [{len(commands)}]"))
-    known = set(states)
-    for row in account_rows(identity):
-        title = row["title"]
-        if title.lstrip("/") in known:
+def list_records(identity: str, view: str = "all") -> int:
+    states = None
+
+    def passwords():
+        nonlocal states
+        if states is None:
+            states = password_states(identity)
+        return states
+
+    def load(selected_type):
+        infos = info_rows(identity)
+        records = []
+        if selected_type != "info":
+            counts = Counter(row["link"] for row in infos if row["link"])
+            records = [dict(kind="password", title=title, status=status, linked=counts[title])
+                       for title, status in passwords().items()]
+        if selected_type != "password":
+            records += infos
+        return records
+
+    browser = RecordBrowser(identity, load, view)
+    while True:
+        row = browser.choose()
+        if row is None:
+            return 0
+        if row["kind"] == "refresh":
+            states = None
             continue
-        known.add(title.lstrip("/"))
-        commands.append(entry_command("pass-add-manual", identity, title, row["username"]))
-        rows.append((title, "未关联条目", f"新增 [{len(commands)}]"))
-    print(f"\n身份：{identity}　密码库状态（只显示标题和是否已填密码）\n")
-    print_status_table(rows)
-    if commands:
-        print("\n操作命令（只修改本地密码库）：")
-        for index, command in enumerate(commands, 1):
-            print(f"[{index}] {command}")
-    else:
-        print("（暂无条目）")
-    if any(status == "未关联条目" for _, status, _ in rows):
-        print("\n未关联条目来自资料库；若已用其他标题保存，请使用上方已有条目的修改命令。")
-    return 0
+        if row["kind"] == "filter":
+            continue
+        if row["kind"] == "password":
+            print(color("\n" + safe_text(row["title"]), "1;36"))
+            linked = [item for item in info_rows(identity) if item["link"] == row["title"]]
+            for item in linked:
+                print(safe_text(f"  {item['key']}: {item['value']}"))
+            action = choose_action([("edit", "补填/修改密码"), ("command", "查看修改命令"), ("exit", "返回")], "操作")
+            if action == "edit":
+                write_entry(identity, row["title"], None, edit=True)
+                states = None
+            elif action == "command":
+                print(entry_command("pass-edit", identity, row["title"]))
+                input("回车返回 ")
+            continue
+        print(color("\n" + safe_text(row["key"]), "1;36"))
+        print(safe_text(row["value"]))
+        try:
+            detail = json.loads(row["note"])
+        except (TypeError, ValueError):
+            detail = row["note"]
+        if isinstance(detail, dict):
+            internal = {"type", "password_title", "source", "source_row", "source_owner"}
+            detail = " · ".join(f"{key}: {value}" for key, value in detail.items() if key not in internal and value)
+        if detail:
+            print(color("备注 · " + safe_text(str(detail)), "2"))
+        if row["link"]:
+            print(color("密码 · " + safe_text(row["link"]), "2"))
+        options = [("link", "关联/更换密码条目")]
+        if row["link"]:
+            options += [("edit", "修改关联密码"), ("command", "查看修改命令"), ("unlink", "解除关联")]
+        action = choose_action([*options, ("exit", "返回")], "操作")
+        if action == "link":
+            candidates = [dict(kind="password", title=title, status=status) for title, status in passwords().items()]
+            chosen = RecordBrowser(identity, lambda _: candidates, "password", picker=True).choose()
+            if chosen:
+                set_password_link(identity, row["id"], chosen["title"])
+        elif action == "unlink":
+            set_password_link(identity, row["id"], None)
+        elif action in ("edit", "command"):
+            if row["link"] not in passwords():
+                print("关联条目已不存在，请重新关联。")
+                input("回车返回 ")
+            elif action == "edit":
+                write_entry(identity, row["link"], None, edit=True)
+                states = None
+            else:
+                print(entry_command("pass-edit", identity, row["link"]))
+                input("回车返回 ")
+
+
+def list_passwords(identity: str) -> int:
+    return list_records(identity, "password")
 
 
 def main() -> int:
@@ -375,7 +450,12 @@ def main() -> int:
         command_parser.add_argument("--identity", default=os.environ.get("ID_ENTRY_ID") or None)
         command_parser.add_argument("--title", default=os.environ.get("ID_ENTRY_TITLE") or None)
         command_parser.add_argument("--username", default=os.environ.get("ID_ENTRY_USER") or None)
+        if command == "list":
+            command_parser.add_argument("--type", choices=("all", "password", "info"),
+                                        default=os.environ.get("ID_LIST_TYPE") or "all")
     args = parser.parse_args()
+    if args.command == "list" and args.type not in ("all", "password", "info"):
+        parser.error("type 只能是 all、password 或 info")
     try:
         if args.command == "import":
             if any("=" not in item for item in args.owner):
@@ -389,7 +469,7 @@ def main() -> int:
         if identity is None:
             return 130
         if args.command == "list":
-            return list_passwords(identity)
+            return list_records(identity, args.type)
         title = args.title
         if not title:
             states = password_states(identity)

@@ -20,7 +20,7 @@ PR := \033[36m
 N  := \033[0m
 endif
 
-.PHONY: help check settings clipboard-check new passwd pass pass-show pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help check settings clipboard-check new passwd pass pass-show list pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示本帮助
 	@e=""; [ -t 1 ] && e=$$(printf '\033'); \
@@ -63,12 +63,16 @@ pass-show: ## 明文显示密码，仅限交互终端（id=gene title="..."）
 	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
 	scripts/pass-ssh.py --show -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
 
-pass-list pass-add-manual pass-edit: export ID_ENTRY_ID = $(id)
-pass-list pass-add-manual pass-edit: export ID_ENTRY_TITLE = $(title)
-pass-list pass-add-manual pass-edit: export ID_ENTRY_USER = $(user)
+list pass-list pass-add-manual pass-edit: export ID_ENTRY_ID = $(id)
+list pass-list pass-add-manual pass-edit: export ID_ENTRY_TITLE = $(title)
+list pass-list pass-add-manual pass-edit: export ID_ENTRY_USER = $(user)
 
-pass-list: ## 表格列出条目、缺失密码和录入/修改命令（id 可选）
+list: export ID_LIST_TYPE = $(if $(type),$(type),all)
+list: ## 分页查看个人信息和密码（id 可选；type=all/password/info）
 	@python3 scripts/account_store.py list
+
+pass-list: ## 只查看密码条目，等同 make list type=password
+	@python3 scripts/account_store.py list --type password
 
 pass-edit: ## 修改已有条目的密码（id/title 可选，缺省方向键选择）
 	@python3 scripts/account_store.py edit
