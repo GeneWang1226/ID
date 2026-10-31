@@ -21,6 +21,8 @@ logs/
 
 # SQLite 库和它的本地备份（库里是非机密个人信息，但副本不入 git）
 data/*.db
+data/*.db-wal
+data/*.db-shm
 backups/
 
 # 系统垃圾
@@ -33,3 +35,6 @@ __pycache__/
 # Node / Next.js 构建产物（package-lock.json 反而要入库，Docker 构建要 npm ci）
 node_modules/
 .next/
+
+# Rust 编译产物；Cargo.lock 随 CLI 提交
+/target/

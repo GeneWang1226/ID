@@ -2,13 +2,17 @@
 // Syncthing 不会把 .stignore 本身同步到其他设备。
 //
 // 同步：identities/、data/（SQLite 数据库）；Docker 环境和 secrets 留在本机
-// 不同步：脚本、模板、文档、.git（这些留给 git）
+// 不同步：源码、模板、文档、.git（这些留给 git）
 
 // git 仓库本体。同步它会在多端把仓库写坏。
 (?d).git
 
-// git 管理的脚本、模板、文档和安装包
-/scripts
+// git 管理的源码、模板、文档和安装包
+/src
+/tests
+/target
+/Cargo.toml
+/Cargo.lock
 /template
 /assets
 /docs
@@ -18,6 +22,7 @@
 /Makefile
 /AGENTS.md
 /README.md
+/CHANGELOG.md
 /.gitignore
 
 // 本机操作日志，两端同时写会冲突

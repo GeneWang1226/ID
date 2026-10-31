@@ -1,4 +1,4 @@
-// AI 配置与调用：与 scripts/ai-organize.py 同一套 OpenAI 兼容接口。
+// AI 配置与调用：与 src/ai.rs 同一套 OpenAI 兼容接口。
 // API key 取环境变量/本机 secrets；非敏感设置从 config.toml 热加载。
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";

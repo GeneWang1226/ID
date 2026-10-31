@@ -4,6 +4,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号与 git tag 对应。
 
+## 未发布
+
+- CLI 从 Python/Bash 迁移为 Rust，源码统一放入 `src/`，保留 Make 命令入口；Web 仍使用 Next.js。
+- KDBX 继续由 KeePassXC 管理，沿用现有 SQLite 数据结构和密码关联。
+- 主密码使用可擦除缓冲区；空闲五分钟主动清除，高权限操作重新验证。
+- 迁移设置、分页列表、账号关联、密码操作、剪贴板、AI 整理、临时凭证和账号表导入。
+- 标签重建和导入附件改用 Linux 匿名内存文件，增加隔离数据的终端与 KeePassXC 集成测试。
+
 ## [Unreleased]
 
 - **配置**：新增可同步的 `config/config.toml` 与 `make settings`；敏感配置迁移到本机 `config/secrets/.secrets.env`，Docker 配置集中在 `docker/`。

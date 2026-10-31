@@ -4,6 +4,18 @@
 
 ## 依赖安装
 
+### Rust CLI
+
+需要 Rust 1.85+（推荐稳定版），通过 [rustup](https://rustup.rs/) 安装。Debian/Ubuntu 的构建依赖：
+
+```bash
+sudo apt install build-essential make keepassxc python3
+make build
+```
+
+SQLite 随 Rust 依赖编译，不需要系统开发库；`sqlite3` 只用于手工查询。Python 3 仅用于 `make test` 的终端集成测试，CLI 源码全部在 `src/`。首次构建下载锁定的依赖，后续构建可复用缓存。发布版可用 `cargo build --release --locked`。
+
+
 ### KeePassXC（管理 .kdbx 密码库）
 
 Debian/Ubuntu:
@@ -46,14 +58,14 @@ sudo apt install make
 ### 新增身份
 
 ```bash
-~/ID/scripts/add-identity.sh <身份名>
+make new id=<身份名>
 ```
 
-脚本会自动：复制模板 → 权限设为 700 → 用 `config/secrets/.secrets.env` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
+CLI 会自动：复制模板 → 权限设为 700 → 用 `config/secrets/.secrets.env` 里的初始密码新建 `<身份名>.kdbx`。已有的密码库不会被覆盖或改写。
 
 ### 新建密码库的初始密码
 
-初始密码写在 `~/ID/config/secrets/.secrets.env`，键名 `KDBX_INITIAL_PASSWORD`，文件权限必须是 `600`（模板见 `config/secrets/.secrets.env.example`，新设备复制后填写）。旧 `docker/.env` 中的 `kdbx_initial_password` 仍可兼容读取。改这个值只影响之后新建的库。
+初始密码写在 `~/ID/config/secrets/.secrets.env`，键名 `KDBX_INITIAL_PASSWORD`，文件权限必须是 `600`（模板见 `config/secrets/.secrets.env.example`，新设备复制后填写）。旧 Docker 环境中的初始密码应先迁移到这里；CLI 不再从 Docker 配置读取秘密。改这个值只影响之后新建的库。
 
 ```bash
 chmod 600 ~/ID/config/secrets/.secrets.env
@@ -69,18 +81,22 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 
 按提示先输入 `config/secrets/.secrets.env` 里的 `KDBX_INITIAL_PASSWORD`，再输两遍新密码。
 
-> `template/passwords/template.kdbx` 不再参与新建。脚本会当场 `db-create`。
+> `template/passwords/template.kdbx` 不再参与新建。CLI 会当场 `db-create`。
 
 ### 临时凭证（AI 代执行密码）
 
-交互式 `make ai` / `make list` 的主密码缓存由 `scripts/vault_session.py` 管理，仅在同一进程中复用，不跨独立命令或终端。切换库、退出会话和 AI `/lock` 会清除缓存；空闲 5 分钟后再次使用需解锁。明文显示和修改已有密码强制重新验证。该缓存不替代 `make grant` 的 AI 授权机制，主密码不会提供给模型。
+交互式 `make ai` / `make list` 的主密码缓存由 `src/vault.rs` 管理，仅在同一进程中复用，不跨独立命令或终端。切换库、退出会话和 AI `/lock` 会清除缓存；空闲 5 分钟即由后台计时清除，下次使用需解锁。明文显示和修改已有密码强制重新验证。该缓存不替代 `make grant` 的 AI 授权机制，主密码不会提供给模型。
 
 `make grant` 把某条目的密码提取成临时凭证，AI 用 `make use` 代执行命令而不见明文（机制与分级 Tags 见 [GUIDE.md](GUIDE.md) 场景四）。维护要点：
 
 - 凭证在 `${XDG_RUNTIME_DIR:-/run/user/<uid>}/id-grants/`，tmpfs，**重启即清空**；目录权限 700，文件 600
 - 过期凭证在每次 `grant` / `grants` 时顺手清理，无需定时任务
-- 条目的 `ai-auto` / `ai-deny` 标签用 `make tag id=<身份> title=<条目> tags=<标签>` 打（`tags=` 留空则清除）；也可在 KeePassXC 图形客户端打，标签随 kdbx 经 Syncthing 同步。`tag-entry.sh` 通过 XML 导出/注入/导入实现，会重建数据库——条目和附件保留，但数据库级的自定义设置（如加密参数）如有改动需自行复查
-- 日志只记「何时授权/使用了哪个条目」，出现泄露疑虑时 `grep grant logs/scripts.log` 核对后 `make revoke all=1`
+- 条目的 `ai-auto` / `ai-deny` 标签用 `make tag id=<身份> title=<条目> tags=<标签>` 打（`tags=` 留空则清除）；也可在 KeePassXC 图形客户端打，标签随 kdbx 经 Syncthing 同步。`src/maintenance.rs` 在 Linux 匿名内存文件中通过 XML 导出/注入/导入实现，会重建数据库——条目和附件保留，但数据库级的自定义设置（如加密参数）如有改动需自行复查
+- 日志只记授权、使用等操作和身份，不记条目内容、密码或 token，出现泄露疑虑时 `grep grant logs/scripts.log` 核对后 `make revoke all=1`
+
+主密码通过匿名管道传入 KeePassXC，不进入命令参数、环境变量、模型请求或日志。主密码输入缓冲区固定容量，退格立即擦除移除的字节；缓存到期、手动锁定和正常退出使用 `zeroize` 清理。工程代码禁止 `unsafe`。
+
+这不能保证清除 KeePassXC、操作系统或依赖库中的所有副本，也没有实现内存锁页或禁用系统转储。机器被入侵、同用户调试权限、交换分区、终端录屏等仍可能泄露。标签重建和原表附件目前需要 Linux；其他平台可用 KeePassXC 图形界面处理这两项。
 
 ### SSH 终端剪贴板与明文权限
 
@@ -91,7 +107,9 @@ SSH 连接首次使用 AI 或剪贴板时会要求粘贴测试文字；结果仅
 回归检查无需接触真实密码库：
 
 ```bash
-python3 -m unittest discover -s scripts/tests -v
+make test
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
 ### 修改模板
