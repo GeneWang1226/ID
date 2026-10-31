@@ -42,10 +42,10 @@ endif
 ifneq ($(origin detail),undefined)
 export ID_EVENT_DETAIL = $(detail)
 endif
-list: export ID_LIST_TYPE = $(if $(type),$(type),all)
-list: export ID_LIST_CATEGORY = $(cat)
+manage list: export ID_LIST_TYPE = $(if $(type),$(type),all)
+manage list: export ID_LIST_CATEGORY = $(cat)
 
-.PHONY: help build test check settings clipboard-check new passwd pass pass-show list pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help build test check settings clipboard-check new passwd pass pass-show manage list pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
 
 help: ## 显示帮助
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  make %-17s %s\n", $$1, $$2}' Makefile
@@ -81,8 +81,10 @@ pass: $(BIN) ## 复制密码（id/title 可选，缺省选择）
 pass-show: $(BIN) ## 明文显示密码，须全局允许并重新验证
 	@$(BIN) pass-show
 
-list: $(BIN) ## 分页查看账号、密码和个人信息（type=all/account/password/info，cat=维度）
-	@$(BIN) list
+manage: $(BIN) ## 身份管理：账号、密码和个人信息（type=all/account/password/info，cat=维度）
+	@$(BIN) manage
+
+list: manage
 
 pass-list: $(BIN) ## 只查看密码条目
 	@$(BIN) pass-list
@@ -135,7 +137,7 @@ item: $(BIN) ## 写入或修改资料（id/cat/key/value/note 可选）
 event: $(BIN) ## 记录事件（id/title/detail 可选）
 	@$(BIN) event
 
-ai: $(BIN) ## AI 整理资料、继续对话或执行本地密码操作（id/file 可选）
+ai: $(BIN) ## 全屏 AI 助手：整理资料、录入账号和本地密码操作（id/file 可选）
 	@$(BIN) ai
 
 status: $(BIN) ## 身份、条目数量和 Web 状态

@@ -37,8 +37,9 @@ enum Commands {
         #[command(flatten)]
         identity: Identity,
     },
-    /// 分页查看账号、密码和个人信息
-    List {
+    /// 管理账号、密码和个人信息
+    #[command(alias = "list")]
+    Manage {
         #[command(flatten)]
         identity: Identity,
         #[arg(long="type",env="ID_LIST_TYPE",default_value="all",value_parser=["all","account","password","info"])]
@@ -189,17 +190,17 @@ fn run() -> Result<()> {
             let name = ask(identity.id, "新身份名: ")?;
             maintenance::new_identity(&project, &name)?;
         }
-        Commands::List {
+        Commands::Manage {
             identity,
             view,
             category,
         } => {
             let id = role(&project, identity)?;
-            browser::list(&project, &id, view, category, &session)?;
+            browser::manage(&project, &id, view, category, &session)?;
         }
         Commands::PassList { identity } => {
             let id = role(&project, identity)?;
-            browser::list(&project, &id, "password".into(), String::new(), &session)?;
+            browser::manage(&project, &id, "password".into(), String::new(), &session)?;
         }
         Commands::Pass { entry } => {
             let id = role(&project, entry.identity)?;

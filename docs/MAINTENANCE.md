@@ -85,7 +85,7 @@ keepassxc-cli db-edit -p ~/ID/identities/<身份名>/passwords/<身份名>.kdbx
 
 ### 临时凭证（AI 代执行密码）
 
-交互式 `make ai` / `make list` 的主密码缓存由 `src/vault.rs` 管理，仅在同一进程中复用，不跨独立命令或终端。切换库、退出会话和 AI `/lock` 会清除缓存；空闲 5 分钟即由后台计时清除，下次使用需解锁。明文显示和修改已有密码强制重新验证。该缓存不替代 `make grant` 的 AI 授权机制，主密码不会提供给模型。
+交互式 `make ai` / `make manage` 的主密码缓存由 `src/vault.rs` 管理，仅在同一进程中复用，不跨独立命令或终端。切换库、退出会话和 AI `/lock` 会清除缓存；空闲 5 分钟即由后台计时清除，下次使用需解锁。明文显示和修改已有密码强制重新验证。该缓存不替代 `make grant` 的 AI 授权机制，主密码不会提供给模型。
 
 `make grant` 把某条目的密码提取成临时凭证，AI 用 `make use` 代执行命令而不见明文（机制与分级 Tags 见 [GUIDE.md](GUIDE.md) 场景四）。维护要点：
 
@@ -120,7 +120,7 @@ cargo clippy --locked --all-targets -- -D warnings
 
 所有身份共用一个 SQLite 库 `./data/id.db`，用 `identity` 列区分。首次启动 Web 界面时自动从 `template/data/schema.sql` 初始化。
 
-`make list` 的资料关联保存在同一库的 `password_links` 表，首次关联时自动创建。它只保存资料 ID 和本身份的 KDBX 条目路径，不存密码；新增关联不会改写 `items` 中的资料。关联随 SQLite 同步，KDBX 条目改名或移动后需在列表中重新关联。`make list type=info` 只读 SQLite，无需解锁密码库。
+`make manage` 的资料关联保存在同一库的 `password_links` 表，首次关联时自动创建。它只保存资料 ID 和本身份的 KDBX 条目路径，不存密码；新增关联不会改写 `items` 中的资料。关联随 SQLite 同步，KDBX 条目改名或移动后需在列表中重新关联。`make manage type=info` 只读 SQLite，无需解锁密码库。
 
 `items.category=account` 独立显示为账号，其余分类作为个人信息维度；分类名可自定义，不需要迁移表结构。备注仍保存在 `items.note`；编辑普通备注直接更新文本，编辑导入账号的备注只更新 JSON 中的 `purpose`，其他结构化备注使用 `text` 字段，保留来源及关联元数据。
 
@@ -158,6 +158,10 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env exec web sqli
 - [ ] **备份**：定期 `tar` 打包 + `gpg -c` 加密后存外部存储；SQLite 库直接复制 `./data/id.db` 或用 `sqlite3 ./data/id.db .dump > backup.sql` 导出。
 
 ## 故障排查
+
+AI 请求失败时，CLI 只显示经过校验的错误码、请求编号和处理提示，不回显服务端原始错误正文，以免其中包含凭据或请求内容。失败菜单会保留本次输入，可修改 AI 设置后重试，或返回输入。
+
+百炼返回 403 时，请结合具体错误码查看[官方错误说明](https://www.alibabacloud.com/help/zh/model-studio/error-code)：`AllocationQuota.FreeTierOnly` 通常涉及免费额度及用尽停机设置，`AccessDenied` 涉及模型访问权限，`AccessDenied.Unpurchased` 涉及服务开通状态。订阅套餐的 API key 和专用接口地址应配套使用；不要仅凭 HTTP 状态码修改 key 或启用付费。
 
 | 问题 | 处理 |
 | --- | --- |

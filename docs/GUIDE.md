@@ -15,9 +15,9 @@
 | `make pass id=gene title="..."` | 复制密码；SSH 复制无效时输入 `v`、Enter 回退明文显示 |
 | `make pass-show id=gene title="..."` | 在当前交互终端明文显示密码，会留在终端记录 |
 | `make clipboard-check` | 重新测试当前 SSH 连接的本地剪贴板，只使用测试文字 |
-| `make list id=gene` | 分区、分页查看账号、密码与个人信息，默认 `type=all` |
-| `make list id=gene type=account` / `type=password` / `type=info` | 只看账号 / 密码 / 个人信息 |
-| `make pass-list id=gene` | 等同 `make list id=gene type=password` |
+| `make manage id=gene` | 分区、分页查看账号、密码与个人信息，默认 `type=all` |
+| `make manage id=gene type=account` / `type=password` / `type=info` | 只看账号 / 密码 / 个人信息 |
+| `make pass-list id=gene` | 等同 `make manage id=gene type=password` |
 | `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
 | `make pass-add-manual` / `make pass-add-manual id=gene title="..."` | 选择账号或自定义条目，预填后手动录入密码 |
 | `make pass-edit id=gene title="..."` | 修改已有条目的密码；不提供标题时用方向键选择 |
@@ -34,6 +34,8 @@
 | `make check` | 安全自检（提交/同步前必跑） |
 | `make status` | 身份、条目数、Web 状态总览 |
 | `make backup` | 备份 SQLite 库到 `backups/` |
+
+综合管理入口已命名为 `make manage`；旧的 `make list` 和 CLI `list` 仍可使用，参数保持兼容。
 
 也支持全部参数一次给全（适合脚本或让 AI 代跑）：
 `make item id=gene cat=account key=proton-email value="gene@proton.me" note="主用邮箱"`
@@ -62,16 +64,20 @@ make new id=gene
 
 参数通过环境变量进入 Rust，SQL 使用绑定参数；包含空格或引号的值仍须遵守 shell 引号规则。
 
+在 `make ai` 中说“保存一个 Telegram 的账号”，即使还没提供登录名，也会显示预填命令 `make item id=gene cat=account key=Telegram` 和“填写账号”选项。选择后在本地填写登录名、邮箱或手机号以及备注，再选择录入密码、关联已有密码或暂不设置；成功录入的密码会自动关联账号。表单输入不会追加到模型对话中，未填写账号前不会创建空记录；已有同名账号会保留，使用 `make manage type=account` 管理。
+
+AI 助手使用全屏界面，上方保留对话、回复和草稿，下方固定输入框或操作选项。空行提交，↑/↓ 选择操作，Enter 确认，PgUp/PgDn 滚动；F2 切换模型 JSON 和思考详情，默认收起。输入 `/lock` 锁定密码库、`/quit` 退出，也可用 Esc 或 Ctrl+C 退出。设置和密码录入完成后返回对话；退出会恢复原终端画面。明文密码只在独立查看画面中显示，按 Enter 返回，不进入对话记录。
+
 ### 查看账号、密码与个人信息
 
 账号和个人信息存在 SQLite，密码存在 KDBX。统一入口默认显示全部，分为账号、密码、个人信息三个平级区域：
 
 ```bash
-make list id=gene
-make list id=gene type=account
-make list id=gene type=info
-make list id=gene type=password
-make list id=gene type=info cat=work
+make manage id=gene
+make manage id=gene type=account
+make manage id=gene type=info
+make manage id=gene type=password
+make manage id=gene type=info cat=work
 ```
 
 ↑/↓ 选择记录，←/→ 翻页，Enter 在该行下方展开详情，再次 Enter 收起。详情完整显示内容和备注，按中文列宽换行；超出屏幕时用 PgUp/PgDn 滚动。未展开时 PgUp/PgDn 翻页。1/2/3/4 切换全部、账号、密码、个人信息，d 选择个人信息维度，r 刷新，q 退出。标题和选择标记使用青色，已设密码绿色，空密码黄色，字段名青色、辅助信息灰色，正文正常亮度，删除入口红色；设置 `NO_COLOR=1` 可关闭颜色。
@@ -97,7 +103,7 @@ make item id=gene cat=preference key=语言 value=中文 note=日常沟通
 
 ### 会话解锁
 
-`make ai` 选定身份后，若本机有该身份的密码库，会先解锁一次；`make list` 则在首次需要密码状态时解锁。普通查询、标题搜索、复制和新增条目复用本次解锁；新增时仍需要输入新条目密码。明文显示（包括复制失败后的 `v` 回退）和修改已有密码会再次验证主密码。
+`make ai` 选定身份后，若本机有该身份的密码库，会先解锁一次；`make manage` 则在首次需要密码状态时解锁。普通查询、标题搜索、复制和新增条目复用本次解锁；新增时仍需要输入新条目密码。明文显示（包括复制失败后的 `v` 回退）和修改已有密码会再次验证主密码。
 
 主密码只保存在当前 Rust 进程的内存里，通过 stdin 交给本机 KeePassXC，不写入文件、环境变量、命令行或模型请求。切换密码库会清除旧缓存；空闲 5 分钟即清除缓存，下次操作需重新解锁；退出会话会释放缓存。独立运行的其他 `make` 命令是新会话，修改密码库主密码、签发凭证等入口仍各自验证。在 AI 输入中使用 `/lock` 可立即锁定本次会话，该指令不发送给模型。`type=info` 不受会话解锁影响。
 

@@ -7,6 +7,7 @@ use crossterm::{
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::{
+    cell::Cell,
     io::{self, IsTerminal, Write},
     time::Duration,
 };
@@ -76,23 +77,46 @@ pub fn wrap(text: &str, columns: usize) -> Vec<String> {
 
 pub struct Terminal {
     alternate: bool,
+    raw: bool,
+}
+thread_local! {
+    static ALTERNATE_SCREEN: Cell<bool> = const { Cell::new(false) };
+}
+pub fn is_fullscreen() -> bool {
+    ALTERNATE_SCREEN.get()
 }
 impl Terminal {
     pub fn new(alternate: bool) -> Result<Self> {
         require_terminal()?;
-        terminal::enable_raw_mode()?;
-        let guard = Self { alternate };
+        let raw = !terminal::is_raw_mode_enabled()?;
+        if raw {
+            terminal::enable_raw_mode()?;
+        }
+        let alternate = alternate && !ALTERNATE_SCREEN.get();
+        let guard = Self { alternate, raw };
         if alternate {
             execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
+            ALTERNATE_SCREEN.set(true);
         }
         Ok(guard)
+    }
+    pub fn suspend<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        terminal::disable_raw_mode()?;
+        execute!(io::stdout(), cursor::Show)?;
+        let result = operation();
+        terminal::enable_raw_mode()?;
+        execute!(io::stdout(), cursor::Hide)?;
+        result
     }
 }
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
         if self.alternate {
             let _ = execute!(io::stdout(), cursor::Show, LeaveAlternateScreen);
+            ALTERNATE_SCREEN.set(false);
+        }
+        if self.raw {
+            let _ = terminal::disable_raw_mode();
         }
     }
 }
@@ -123,9 +147,12 @@ pub fn choose_from(title: &str, choices: &[String], selected: usize) -> Result<O
     if choices.is_empty() {
         return Ok(None);
     }
-    let _terminal = Terminal::new(true)?;
+    let terminal = Terminal::new(true)?;
+    if !terminal.alternate {
+        execute!(io::stdout(), cursor::Hide)?;
+    }
     let mut selected = selected.min(choices.len() - 1);
-    loop {
+    let choice = loop {
         let (w, h) = terminal::size()?;
         let page = (h as usize).saturating_sub(5).max(1);
         let start = selected / page * page;
@@ -146,17 +173,26 @@ pub fn choose_from(title: &str, choices: &[String], selected: usize) -> Result<O
         draw(&lines)?;
         if let Some(k) = key(Duration::from_millis(200))? {
             match k.code {
-                _ if cancelled(k) => return Ok(None),
-                KeyCode::Char('q') => return Ok(None),
+                _ if cancelled(k) => break None,
+                KeyCode::Char('q') => break None,
                 KeyCode::Up | KeyCode::Char('k') => {
                     selected = (selected + choices.len() - 1) % choices.len()
                 }
                 KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1) % choices.len(),
-                KeyCode::Enter => return Ok(Some(selected)),
+                KeyCode::Enter => break Some(selected),
                 _ => {}
             }
         }
+    };
+    if !terminal.alternate {
+        execute!(
+            io::stdout(),
+            cursor::MoveTo(0, 0),
+            Clear(ClearType::All),
+            cursor::Show
+        )?;
     }
+    Ok(choice)
 }
 pub fn confirm(title: &str) -> Result<bool> {
     Ok(choose(title, &["取消".into(), "确认".into()])? == Some(1))

@@ -13,10 +13,11 @@
 ```bash
 make build
 make help
-make list
+make manage
+make ai
 ```
 
-Make 入口调用 `target/debug/id`，源码变化后自动重新编译；也可以直接运行 `cargo run --locked -- list`。CLI 不再依赖 Python 或 Bash 脚本；`make test` 的终端测试需要 Python 3，临时凭证代执行仍使用系统 Bash。Web 保持 Next.js。
+Make 入口调用 `target/debug/id`，源码变化后自动重新编译；也可以直接运行 `cargo run --locked -- manage`。CLI 不再依赖 Python 或 Bash 脚本；`make test` 的终端测试需要 Python 3，临时凭证代执行仍使用系统 Bash。Web 保持 Next.js。
 
 KDBX 仍由本机 KeePassXC 处理，SQLite 结构与现有资料兼容，无需转换资料。主密码使用可擦除缓冲区，空闲五分钟、锁定或退出时清除。Rust 的内存安全不等于防止系统内存转储，见维护手册。
 

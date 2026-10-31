@@ -181,7 +181,10 @@ impl Browser {
                 let current = &records[pages[self.page].clone()];
                 self.selected = self.selected.min(current.len().saturating_sub(1));
                 let mut lines = vec![
-                    ui::color(&ui::clip(&format!("ID  /  {identity}"), width), "1;36"),
+                    ui::color(
+                        &ui::clip(&format!("ID  /  身份管理  /  {identity}"), width),
+                        "1;36",
+                    ),
                     String::new(),
                     [
                         ("all", "全部"),
@@ -320,7 +323,7 @@ impl Browser {
     }
 }
 
-pub fn list(
+pub fn manage(
     project: &Project,
     identity: &str,
     mut view: String,

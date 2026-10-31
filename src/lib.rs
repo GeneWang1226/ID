@@ -1,4 +1,5 @@
 pub mod ai;
+mod ai_view;
 pub mod browser;
 pub mod clipboard;
 pub mod config;

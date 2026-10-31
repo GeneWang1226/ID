@@ -153,6 +153,11 @@ fn show(project: &Project, identity: &str, title: &str, session: &Session) -> Re
     out.write_all(&value)?;
     out.write_all(b"\n")?;
     out.flush()?;
+    drop(out);
+    drop(value);
+    if ui::is_fullscreen() {
+        ui::input("按 Enter 返回 AI: ")?;
+    }
     Ok(())
 }
 pub fn pass(
