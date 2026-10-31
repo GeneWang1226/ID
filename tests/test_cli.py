@@ -1,5 +1,6 @@
 """Exercise the compiled CLI using disposable data and real KeePassXC, never user vaults."""
 import base64
+from contextlib import closing
 import fcntl
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -129,9 +130,9 @@ class CliTests(unittest.TestCase):
                      "--value", "test@example.com" if category == "account" else "工程师", "--note", note)
 
     def db(self, query, parameters=()):
-        with sqlite3.connect(self.root / "data/id.db") as db:
-            result = db.execute(query, parameters).fetchall()
-        return result
+        with closing(sqlite3.connect(self.root / "data/id.db")) as db:
+            with db:
+                return db.execute(query, parameters).fetchall()
 
     def test_make_arguments_are_data_not_shell_code(self):
         payload = "O'Reilly; `touch SHOULD-NOT-EXIST`; \"quoted\""
@@ -838,3 +839,85 @@ class CliTests(unittest.TestCase):
         self.assertNotIn(PASSWORD, json.dumps(requests))
         self.assertEqual(output.count(b"\x1b[?1049h"), 1)
         self.assertEqual(output.count(b"\x1b[?1049l"), 1)
+
+    def test_ai_manage_tool_reads_real_status_without_sending_vault_contents(self):
+        self.add("FilledEntry")
+        self.add("EmptyEntry", password="")
+        self.add("UNLINKED_VAULT_TITLE_MUST_STAY_LOCAL")
+        for key in ["Complete", "Empty", "Unlinked", "Broken"]:
+            self.item(key=key, category="account")
+        self.item(key="PRIVATE_BOB", category="account", identity="bob")
+        self.item(key="职位")
+        for key, entry in [("Complete", "FilledEntry"), ("Empty", "EmptyEntry"), ("Broken", "MissingEntry")]:
+            self.db("INSERT INTO password_links SELECT id,? FROM items WHERE identity=? AND key=?", (entry, "alice", key))
+        tool = {"role": "assistant", "content": None, "reasoning_content": "查询账号状态",
+                "tool_calls": [{"id": "manage-1", "type": "function", "function": {
+                    "name": "manage", "arguments": json.dumps({"type": "all"})}}]}
+        draft = {"reply": "Empty 的密码未填；Broken 的关联条目不存在；Unlinked 尚未关联，不能确定是否已有密码。"}
+        requests = self.ai_server([(200, {"choices": [{"message": tool}]}),
+                                   (200, {"choices": [{"message": {"content": json.dumps(draft)}}]})])
+        t = Terminal(self, ["ai", "--id", "alice"])
+        t.expect("主密码:")
+        t.send(MASTER + "\r")
+        t.expect("空行提交")
+        t.send("查看哪些账号还没有设置密码\r\r")
+        t.expect("正在查询身份管理")
+        t.expect("下一步")
+        t.send("q")
+        output = t.finish()
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0]["tools"][0]["function"]["name"], "manage")
+        messages = requests[1]["messages"]
+        self.assertEqual(messages[-2], tool)
+        self.assertEqual(messages[-1]["tool_call_id"], "manage-1")
+        data = json.loads(messages[-1]["content"])
+        states = {row["name"]: row["password_status"] for row in data["rows"] if row["category"] == "account"}
+        self.assertEqual(states, {"Complete": "已设置", "Empty": "未填密码", "Unlinked": "未关联", "Broken": "条目不存在"})
+        self.assertTrue(any(row.get("key") == "职位" for row in data["rows"]))
+        for secret in [MASTER, PASSWORD, "PRIVATE_BOB", "UNLINKED_VAULT_TITLE_MUST_STAY_LOCAL", "FilledEntry", "EmptyEntry"]:
+            self.assertNotIn(secret, json.dumps(requests))
+        self.assertNotIn(PASSWORD.encode(), output)
+        self.assertNotIn(b"make pass-add-manual", output)
+        self.assertEqual(output.count("主密码:".encode()), 1)
+        self.assertEqual(self.db("SELECT count(*) FROM items"), [(6,)])
+
+    def test_ai_phone_draft_is_corrected_before_confirmation(self):
+        draft = {"reply": "已整理为草稿", "items": [
+            {"category": "account", "key": "电话号码", "value": "5550100000", "note": "联系方式"},
+            {"category": "account", "key": "Telegram", "value": "5550100000"}]}
+        self.ai_server([(200, {"choices": [{"message": {"content": json.dumps(draft)}}]})])
+        t = Terminal(self, ["ai", "--id", "alice"])
+        t.expect("主密码:")
+        t.send(MASTER + "\r")
+        t.expect("空行提交")
+        t.send("记录我的电话号码和 Telegram 账号\r\r")
+        t.expect("草稿：contact / 电话号码")
+        t.expect("草稿：account / Telegram")
+        self.assertEqual(self.db("SELECT count(*) FROM items"), [(0,)])
+        t.expect("下一步")
+        t.send(ENTER)
+        t.expect("空行提交")
+        t.send("/quit\r\r")
+        t.finish()
+        self.assertEqual(self.db("SELECT category,key FROM items ORDER BY category"),
+                         [("account", "Telegram"), ("contact", "电话号码")])
+
+    def test_ai_tools_cannot_execute_commands_and_repeated_queries_are_bounded(self):
+        for name, expected, rounds in [("shell", "不支持的工具", 1), ("manage", "查询次数过多", 5)]:
+            with self.subTest(name=name):
+                tool = {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "manage-1", "type": "function", "function": {"name": name,
+                        "arguments": json.dumps({"type": "info"})}}]}
+                requests = self.ai_server([(200, {"choices": [{"message": tool}]})])
+                t = Terminal(self, ["ai", "--id", "alice"])
+                t.expect("主密码:")
+                t.send(MASTER + "\r")
+                t.expect("空行提交")
+                t.send("查一下现有资料\r\r")
+                t.expect(expected)
+                t.expect("输入已保留")
+                t.send("q")
+                output = t.finish()
+                self.assertEqual(len(requests), rounds)
+                self.assertNotIn(PASSWORD.encode(), output)
+                self.assertEqual(self.db("SELECT count(*) FROM items"), [(0,)])

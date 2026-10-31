@@ -34,6 +34,20 @@ pub fn category_label(category: &str) -> &str {
         _ => category,
     }
 }
+
+pub fn item_category<'a>(category: &'a str, key: &str) -> &'a str {
+    let key = key.trim().to_lowercase().replace([' ', '-', '_'], "");
+    if category == "account"
+        && matches!(
+            key.as_str(),
+            "电话号码" | "手机号" | "手机号码" | "联系电话" | "phone" | "phonenumber" | "telephone"
+        )
+    {
+        "contact"
+    } else {
+        category
+    }
+}
 const INTERNAL: &[&str] = &[
     "type",
     "label",
@@ -165,7 +179,7 @@ impl Store {
                 .all(|v| !v.trim().is_empty()),
             "身份、分类、名称和内容不能为空"
         );
-        self.db.execute("INSERT INTO items(identity,category,key,value,note) VALUES(?,?,?,?,?) ON CONFLICT(identity,category,key) DO UPDATE SET value=excluded.value,note=excluded.note,updated_at=datetime('now')",params![identity,category,key,value,note])?;
+        self.db.execute("INSERT INTO items(identity,category,key,value,note) VALUES(?,?,?,?,?) ON CONFLICT(identity,category,key) DO UPDATE SET value=excluded.value,note=excluded.note,updated_at=datetime('now')",params![identity,item_category(category, key),key,value,note])?;
         Ok(())
     }
     pub fn event(&self, identity: &str, title: &str, detail: &str) -> Result<()> {
