@@ -32,6 +32,11 @@ struct Entry {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// 基础信息统一为 ID_info/身份名，并整理本项目旧根条目
+    Organize {
+        #[command(flatten)]
+        identity: Identity,
+    },
     /// 新建或补齐身份目录
     New {
         #[command(flatten)]
@@ -120,15 +125,13 @@ enum Commands {
         #[command(flatten)]
         identity: Identity,
     },
-    /// 初始化 SQLite 结构
-    DbInit,
-    /// 备份 SQLite 数据库
+    /// 备份所有身份的加密密码库
     Backup,
-    /// 身份及资料统计
+    /// 各身份密码库状态
     Status,
     /// 安全检查
     Check,
-    /// 导入账号表，仅将非机密列写入资料库
+    /// 导入账号表，保存到各身份 KDBX
     Import {
         file: PathBuf,
         #[arg(long = "owner")]
@@ -157,7 +160,7 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// 修改密码条目 Tags（需要重建密码库与再次验证）
+    /// 修改密码条目 Tags（需要再次验证）
     Tag {
         #[command(flatten)]
         entry: Entry,
@@ -254,6 +257,8 @@ fn run() -> Result<()> {
                 first.bytes() == second.bytes() && !first.is_empty(),
                 "两次输入不一致，或主密码为空"
             );
+            let _lock = store::write_lock(&project, &id)?;
+            store::backup(&project, &id)?;
             session.run(
                 &vault,
                 "db-edit",
@@ -283,7 +288,7 @@ fn run() -> Result<()> {
             let key = ask(key, "名称: ")?;
             let value = ask(value, "内容: ")?;
             let note = optional(note, "备注（可空）: ")?;
-            Store::open(&project)?.put(&id, &cat, &key, &value, &note)?;
+            Store::open(&project, &id, &session)?.put(&id, &cat, &key, &value, &note)?;
             println!("已保存。");
         }
         Commands::Event {
@@ -292,7 +297,7 @@ fn run() -> Result<()> {
             detail,
         } => {
             let id = role(&project, identity)?;
-            Store::open(&project)?.event(
+            Store::open(&project, &id, &session)?.event(
                 &id,
                 &ask(title, "事件标题: ")?,
                 &optional(detail, "详情（可空）: ")?,
@@ -301,7 +306,7 @@ fn run() -> Result<()> {
         }
         Commands::Show { identity } => {
             let id = role(&project, identity)?;
-            let s = Store::open(&project)?;
+            let s = Store::open(&project, &id, &session)?;
             for item in s.items(&id)? {
                 println!(
                     "{} / {} = {}\n  {}",
@@ -310,48 +315,40 @@ fn run() -> Result<()> {
                     ui::clean(&item.value),
                     ui::clean(&item.remark())
                 );
+                for field in &item.fields {
+                    println!(
+                        "  {} = {}",
+                        ui::clean(&field.name),
+                        ui::clean(field.value.as_deref().unwrap_or("••••（受保护）"))
+                    );
+                }
             }
-            let mut q=s.db.prepare("SELECT happened_at,title,detail FROM events WHERE identity=? ORDER BY happened_at DESC")?;
-            for row in q.query_map([&id], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })? {
-                let (time, title, detail) = row?;
+        }
+        Commands::Organize { identity } => {
+            let id = role(&project, identity)?;
+            Store::open(&project, &id, &session)?.organize()?;
+        }
+        Commands::Backup => {
+            for id in identity::names(&project)? {
+                let path = store::backup(&project, &id)?;
+                println!("{}  {}", id, path.strip_prefix(&project.root)?.display());
+            }
+        }
+        Commands::Status => {
+            for id in identity::names(&project)? {
                 println!(
-                    "{} {} {}",
-                    ui::clean(&time),
-                    ui::clean(&title),
-                    ui::clean(&detail)
+                    "{}  KDBX {}",
+                    id,
+                    if identity::vault(&project, &id).is_ok() {
+                        "就绪"
+                    } else {
+                        "未创建"
+                    }
                 );
             }
         }
-        Commands::DbInit => {
-            Store::open(&project)?;
-        }
-        Commands::Backup => {
-            let store = Store::open(&project)?;
-            let folder = project.root.join("backups");
-            project.contained(&folder)?;
-            id_manager::private_dir(&folder)?;
-            let path = folder.join(format!(
-                "id-{}.db",
-                chrono::Local::now().format("%Y%m%d-%H%M%S-%f")
-            ));
-            id_manager::private_file(&path)?;
-            store.db.backup("main", &path, None)?;
-            println!("备份：{}", path.strip_prefix(&project.root)?.display());
-        }
-        Commands::Status => {
-            let store = Store::open(&project)?;
-            for id in identity::names(&project)? {
-                println!("{}  {} 条资料", id, store.items(&id)?.len());
-            }
-        }
         Commands::Check => id_manager::security::check(&project)?,
-        Commands::Import { file, owners } => import::accounts(&project, &file, &owners)?,
+        Commands::Import { file, owners } => import::accounts(&project, &file, &owners, &session)?,
         Commands::Grant { entry, ttl } => {
             let id = role(&project, entry.identity)?;
             let title = ask(entry.title, "条目标题: ")?;

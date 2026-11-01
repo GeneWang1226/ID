@@ -2,55 +2,54 @@
 .DEFAULT_GOAL := help
 CARGO ?= cargo
 BIN := target/debug/id
-COMPOSE := docker compose -f docker/docker-compose.yml $(if $(wildcard docker/.env),--env-file docker/.env,)
 
-export ID_ENTRY_ID = $(id)
-export ID_ENTRY_TITLE = $(title)
+export ID_ENTRY_ID = $(value id)
+export ID_ENTRY_TITLE = $(value title)
 ifneq ($(origin user),undefined)
-export ID_ENTRY_USER = $(user)
+export ID_ENTRY_USER = $(value user)
 endif
 ifneq ($(origin file),undefined)
-export ID_INPUT_FILE = $(file)
+export ID_INPUT_FILE = $(value file)
 endif
 ifneq ($(origin ttl),undefined)
-export ID_GRANT_TTL = $(ttl)
+export ID_GRANT_TTL = $(value ttl)
 endif
 ifneq ($(origin tags),undefined)
-export ID_ENTRY_TAGS = $(tags)
+export ID_ENTRY_TAGS = $(value tags)
 endif
 ifneq ($(origin token),undefined)
-export ID_GRANT_TOKEN = $(token)
+export ID_GRANT_TOKEN = $(value token)
 endif
 ifneq ($(origin cmd),undefined)
 export ID_GRANT_COMMAND = $(cmd)
 endif
 ifneq ($(origin cat),undefined)
-export ID_ITEM_CATEGORY = $(cat)
+export ID_ITEM_CATEGORY = $(value cat)
 endif
 ifneq ($(origin key),undefined)
-export ID_ITEM_KEY = $(key)
+export ID_ITEM_KEY = $(value key)
 endif
 ifneq ($(origin value),undefined)
-export ID_ITEM_VALUE = $(value)
+export ID_ITEM_VALUE = $(value value)
 endif
 ifneq ($(origin note),undefined)
-export ID_ITEM_NOTE = $(note)
+export ID_ITEM_NOTE = $(value note)
 endif
 ifneq ($(origin title),undefined)
-export ID_EVENT_TITLE = $(title)
+export ID_EVENT_TITLE = $(value title)
 endif
 ifneq ($(origin detail),undefined)
-export ID_EVENT_DETAIL = $(detail)
+export ID_EVENT_DETAIL = $(value detail)
 endif
-manage list: export ID_LIST_TYPE = $(if $(type),$(type),all)
-manage list: export ID_LIST_CATEGORY = $(cat)
+manage list: export ID_LIST_TYPE = $(if $(value type),$(value type),all)
+manage list: export ID_LIST_CATEGORY = $(value cat)
 
-.PHONY: help build test check settings clipboard-check new passwd pass pass-show manage list pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help build test check settings clipboard-check new passwd pass pass-show manage list pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag show item event ai status backup organize
 
 help: ## 显示帮助
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  make %-17s %s\n", $$1, $$2}' Makefile
 
-$(BIN): Cargo.toml Cargo.lock $(wildcard src/*.rs) template/data/schema.sql
+$(BIN): Cargo.toml Cargo.lock $(wildcard src/*.rs)
 	@$(CARGO) build --locked
 
 build: $(BIN) ## 编译 Rust CLI（源码在 src/）
@@ -86,6 +85,9 @@ manage: $(BIN) ## 身份管理：账号、密码和个人信息（type=all/accou
 
 list: manage
 
+organize: $(BIN) ## 基础信息整理为 ID_info/身份名，旧项目根条目归组（id=gene）
+	@$(BIN) organize
+
 pass-list: $(BIN) ## 只查看密码条目
 	@$(BIN) pass-list
 
@@ -113,21 +115,6 @@ revoke: $(BIN) ## 撤销凭证（token=... 或 all=1）
 tag: $(BIN) ## 修改标签（id/title 可选，tags=ai-deny；tags= 清空）
 	@$(BIN) tag
 
-web: ## 构建并启动 Web 界面
-	@set -a; [ ! -f config/secrets/.secrets.env ] || . ./config/secrets/.secrets.env; set +a; $(COMPOSE) up -d --build
-
-web-stop: ## 停止 Web 界面
-	@$(COMPOSE) down
-
-web-logs: ## 查看 Web 日志
-	@$(COMPOSE) logs -f web
-
-db-init: $(BIN)
-	@$(BIN) db-init
-
-db: db-init ## 打开 SQLite 交互查询
-	@sqlite3 data/id.db
-
 show: $(BIN) ## 打印身份资料和事件（id 可选）
 	@$(BIN) show
 
@@ -140,9 +127,8 @@ event: $(BIN) ## 记录事件（id/title/detail 可选）
 ai: $(BIN) ## 全屏 AI 助手：整理资料、录入账号和本地密码操作（id/file 可选）
 	@$(BIN) ai
 
-status: $(BIN) ## 身份、条目数量和 Web 状态
+status: $(BIN) ## 查看身份密码库状态
 	@$(BIN) status
-	@$(COMPOSE) ps 2>/dev/null || true
 
-backup: $(BIN) ## 备份 SQLite 到 backups/
+backup: $(BIN) ## 备份各身份 KDBX 到 backups/vaults/
 	@$(BIN) backup

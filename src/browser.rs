@@ -21,7 +21,9 @@ enum Action {
     Reload,
     Filter(String),
     Dimension,
-    Record(Record, char),
+    New,
+    Lock,
+    Record(usize, char),
 }
 fn batches(records: &[Record], height: usize) -> Vec<std::ops::Range<usize>> {
     let mut ranges = Vec::new();
@@ -69,8 +71,6 @@ fn render(
                 &ui::clip(
                     if row.kind() == "account" {
                         "  账号                  登录名 / 邮箱              密码        备注"
-                    } else if row.kind() == "password" {
-                        "  条目                              密码        关联资料"
                     } else {
                         "  名称                  内容                      备注"
                     },
@@ -83,7 +83,10 @@ fn render(
         let content = if width < 60 {
             format!(
                 "{}  {}",
-                ui::clip(&row.title, width.saturating_sub(16)),
+                ui::clip(
+                    &format!("{} {}", row.item.glyph(), row.item.name()),
+                    width.saturating_sub(16)
+                ),
                 ui::color(
                     &row.status,
                     if row.status == "已设置" {
@@ -93,12 +96,13 @@ fn render(
                     }
                 )
             )
-        } else if let Some(item) = &row.item {
+        } else {
+            let item = &row.item;
             if row.kind() == "account" {
                 format!(
                     "{}  {}  {}  {}",
-                    cell(&item.name(), 20),
-                    cell(&item.username(), width.saturating_sub(58)),
+                    cell(&format!("{} {}", item.glyph(), item.name()), 20),
+                    cell(&item.username(), width.saturating_sub(58).min(48)),
                     ui::color(
                         &cell(&row.status, 10),
                         if row.status == "已设置" {
@@ -112,25 +116,18 @@ fn render(
             } else {
                 format!(
                     "{}  {}  {}",
-                    cell(&item.key, 20),
-                    cell(&item.value, width.saturating_sub(46)),
+                    cell(&format!("{} {}", item.glyph(), item.key), 20),
+                    cell(
+                        &if item.category == "info" {
+                            format!("{} 个字段", item.fields.len())
+                        } else {
+                            item.value.clone()
+                        },
+                        width.saturating_sub(46).min(60)
+                    ),
                     ui::clip(&item.remark(), 20)
                 )
             }
-        } else {
-            format!(
-                "{}  {}  {}",
-                cell(&row.title, width.saturating_sub(28)),
-                ui::color(
-                    &cell(&row.status, 10),
-                    if row.status == "已设置" {
-                        "32"
-                    } else {
-                        "33"
-                    }
-                ),
-                row.linked
-            )
         };
         if i == selected {
             position = body.len();
@@ -239,7 +236,7 @@ impl Browser {
                 } else {
                     ui::color(
                         &ui::clip(
-                            "1 全部  2 账号  3 密码  4 信息  d 维度  r 刷新  q 退出",
+                            "1 全部  2 账号  3 密码  4 信息  n 新增  d 维度  r 刷新  l 锁定  q 退出",
                             width,
                         ),
                         "2",
@@ -265,6 +262,8 @@ impl Browser {
                         ));
                     }
                     KeyCode::Char('r') => return Ok(Action::Reload),
+                    KeyCode::Char('n') => return Ok(Action::New),
+                    KeyCode::Char('l') => return Ok(Action::Lock),
                     KeyCode::Char('d') => return Ok(Action::Dimension),
                     KeyCode::Enter if !current.is_empty() => {
                         self.expanded = !self.expanded;
@@ -273,10 +272,10 @@ impl Browser {
                     KeyCode::Char(c @ ('e' | 'o' | 'f' | 'x'))
                         if self.expanded && !current.is_empty() =>
                     {
-                        return Ok(Action::Record(current[self.selected].clone(), c));
+                        return Ok(Action::Record(pages[self.page].start + self.selected, c));
                     }
                     KeyCode::Delete if self.expanded && !current.is_empty() => {
-                        return Ok(Action::Record(current[self.selected].clone(), 'x'));
+                        return Ok(Action::Record(pages[self.page].start + self.selected, 'x'));
                     }
                     KeyCode::PageDown if self.expanded => {
                         self.offset += height.saturating_sub(10).max(1)
@@ -330,219 +329,372 @@ pub fn manage(
     mut category: String,
     session: &Session,
 ) -> Result<()> {
-    let mut store = Store::open(project)?;
-    let mut states = None;
+    let store = Store::open(project, identity, session)?;
     let mut browser = Browser::default();
     loop {
         let items = store.items(identity)?;
-        if states.is_none()
-            && (matches!(view.as_str(), "all" | "password")
-                || (view == "account" && items.iter().any(|i| i.link.is_some())))
-        {
-            states = Some(store::password_states(project, identity, session)?);
+        let records = store::records(&items, &BTreeMap::new(), &view, &category);
+        let action = browser.choose(identity, &view, &records, &items)?;
+        if matches!(action, Action::Exit) {
+            return Ok(());
         }
-        let empty = BTreeMap::new();
-        let records = store::records(&items, states.as_ref().unwrap_or(&empty), &view, &category);
-        match browser.choose(identity, &view, &records, &items)? {
-            Action::Exit => return Ok(()),
-            Action::Reload => states = None,
-            Action::Filter(next) => view = next,
-            Action::Dimension => {
-                let mut categories = vec![String::new()];
-                for i in &items {
-                    if i.category != "account" && !categories.contains(&i.category) {
-                        categories.push(i.category.clone());
+        let operation = (|| -> Result<()> {
+            match action {
+                Action::Exit => return Ok(()),
+                Action::Reload => {}
+                Action::Lock => {
+                    session.lock();
+                    ui::input("已锁定，回车重新解锁: ")?;
+                }
+                Action::Filter(next) => view = next,
+                Action::New => new_record(&store)?,
+                Action::Dimension => {
+                    let mut categories = vec![String::new()];
+                    for f in items.iter().flat_map(|i| &i.fields) {
+                        if !f.category.is_empty() && !categories.contains(&f.category) {
+                            categories.push(f.category.clone());
+                        }
+                    }
+                    let labels = categories
+                        .iter()
+                        .map(|c| {
+                            if c.is_empty() {
+                                "全部维度".into()
+                            } else {
+                                store::category_label(c).into()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    if let Some(i) = ui::choose("选择维度", &labels)? {
+                        category = categories[i].clone();
+                        view = "info".into();
+                        browser = Browser::default();
                     }
                 }
-                let labels = categories
-                    .iter()
-                    .map(|c| {
-                        if c.is_empty() {
-                            "全部维度".into()
-                        } else {
-                            store::category_label(c).into()
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(i) = ui::choose("选择维度", &labels)? {
-                    category = categories[i].clone();
-                    view = "info".into();
-                    browser = Browser::default();
-                }
-            }
-            Action::Record(row, mut action) => {
-                if action == 'o' {
-                    let options = if row.item.is_some() {
-                        vec![
+                Action::Record(index, mut key) => {
+                    let item = &records[index].item;
+                    if key == 'o' {
+                        let choices = [
                             "编辑备注",
-                            "关联密码",
-                            "新增密码并关联",
-                            "修改关联密码",
-                            "删除单个字段",
-                            "删除整条记录",
-                        ]
-                    } else {
-                        vec!["修改密码", "删除整条密码"]
-                    };
-                    let options = options.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-                    let Some(i) = ui::choose(&row.title, &options)? else {
-                        continue;
-                    };
-                    action = if row.item.is_some() {
-                        ['e', 'l', 'a', 'p', 'f', 'x'][i]
-                    } else {
-                        ['e', 'x'][i]
-                    };
-                }
-                let operation = (|| -> Result<()> {
-                    if let Some(item) = &row.item {
-                        match action {
-                            'e' => {
-                                let text = ui::input("新备注（Enter 保留，- 清空）: ")?;
-                                if !text.is_empty() {
-                                    store.note(
-                                        identity,
-                                        item.id,
-                                        if text == "-" { "" } else { &text },
-                                    )?;
-                                }
-                            }
-                            'l' => {
-                                if let Some(title) =
-                                    store::select_password(project, identity, "", session)?
-                                {
-                                    store.link(identity, item.id, Some(&title))?;
-                                }
-                            }
-                            'a' => {
-                                let title = store::write_password(
-                                    project,
-                                    identity,
-                                    Some(&item.title()),
-                                    Some(&item.username()),
-                                    false,
-                                    false,
-                                    session,
-                                )?;
-                                store.link(identity, item.id, Some(&title))?;
-                                states = None;
-                            }
-                            'p' => {
-                                if let Some(title) = &item.link {
-                                    store::write_password(
-                                        project,
-                                        identity,
-                                        Some(title),
-                                        None,
-                                        true,
-                                        false,
-                                        session,
-                                    )?;
-                                    states = None;
-                                }
-                            }
-                            'f' => {
-                                let mut fields = store::fields(&item.note);
-                                if item.link.is_some() {
-                                    fields.push(("link".into(), "密码关联".into(), String::new()));
-                                }
-                                let mut labels = vec!["取消".into()];
-                                labels.extend(fields.iter().map(|(_, label, _)| label.clone()));
-                                if let Some(index) = ui::choose("选择要删除的字段", &labels)?
-                                {
-                                    if index > 0
-                                        && ui::confirm(&format!(
-                                            "删除 [{}] {} 的{}？",
-                                            identity,
-                                            item.name(),
-                                            fields[index - 1].1
-                                        ))?
-                                    {
-                                        store.delete_field(
-                                            identity,
-                                            item.id,
-                                            &fields[index - 1].0,
-                                        )?;
-                                    }
-                                }
-                            }
-                            'x' if ui::confirm(&format!(
-                                "删除 [{}] {}？关联的密码条目保留。",
-                                identity,
-                                item.name()
-                            ))? =>
-                            {
-                                store.delete(identity, item.id)?;
-                                browser.expanded = false;
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        match action {
-                            'e' => {
-                                store::write_password(
-                                    project,
-                                    identity,
-                                    Some(&row.title),
-                                    None,
-                                    true,
-                                    false,
-                                    session,
-                                )?;
-                                states = None;
-                            }
-                            'x' if ui::confirm(&format!(
-                                "删除 [{}] {}？先备份密码库，并再次验证主密码。",
-                                identity, row.title
-                            ))? =>
-                            {
-                                store::delete_password(
-                                    project, identity, &row.title, session, &store,
-                                )?;
-                                states = None;
-                                browser.expanded = false;
-                            }
-                            _ => {}
-                        }
+                            "编辑字段",
+                            "添加字段",
+                            "设置密码",
+                            "复制密码",
+                            "修改图标",
+                            "导入附件",
+                            "导出附件",
+                            "删除字段",
+                            "删除整条",
+                        ];
+                        let Some(i) = ui::choose(
+                            &item.key,
+                            &choices.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                        )?
+                        else {
+                            return Ok(());
+                        };
+                        key = ['e', 'v', 'a', 'p', 'c', 'i', 't', 's', 'f', 'x'][i];
                     }
-                    Ok(())
-                })();
-                if let Err(error) = operation {
-                    eprintln!("{}", ui::color(&ui::clean(&error.to_string()), "31"));
-                    let _ = ui::input("回车返回 ");
+                    match key {
+                        'e' => {
+                            let text = ui::input("新备注（Enter 保留，- 清空）: ")?;
+                            if !text.is_empty() {
+                                store.note(
+                                    identity,
+                                    &item.id,
+                                    if text == "-" { "" } else { &text },
+                                )?;
+                            }
+                        }
+                        'a' => edit_field(&store, item, None)?,
+                        'v' => {
+                            let mut keys = if item.category == "account" {
+                                vec!["UserName".to_string(), "URL".into()]
+                            } else {
+                                Vec::new()
+                            };
+                            keys.extend(item.fields.iter().map(|f| f.name.clone()));
+                            let labels = keys
+                                .iter()
+                                .map(|s| match s.as_str() {
+                                    "UserName" => "登录名".into(),
+                                    "URL" => "网址".into(),
+                                    _ => s.clone(),
+                                })
+                                .collect::<Vec<_>>();
+                            if let Some(i) = ui::choose("编辑字段", &labels)? {
+                                edit_field(&store, item, Some(&keys[i]))?;
+                            }
+                        }
+                        'p' if item.category == "account" => {
+                            store::write_password(
+                                project,
+                                identity,
+                                Some(&item.title()),
+                                None,
+                                item.password_set,
+                                false,
+                                session,
+                            )?;
+                        }
+                        'c' if item.category == "account" => crate::clipboard::pass(
+                            project,
+                            identity,
+                            Some(&item.title()),
+                            false,
+                            session,
+                        )?,
+                        'i' => {
+                            let labels = store::ICONS
+                                .iter()
+                                .map(|(i, s)| format!("{} {s}", store::icon(*i)))
+                                .collect::<Vec<_>>();
+                            if let Some(i) =
+                                ui::choose("条目图标（同步 KeePass 标准图标）", &labels)?
+                            {
+                                store.icon(&item.id, store::ICONS[i].0)?;
+                            }
+                        }
+                        't' | 's' => attachment(&store, item, key == 't')?,
+                        'f' => {
+                            let mut keys = item
+                                .fields
+                                .iter()
+                                .map(|f| f.name.clone())
+                                .collect::<Vec<_>>();
+                            if !item.note.is_empty() {
+                                keys.push("Notes".into());
+                            }
+                            if let Some(i) = ui::choose("删除字段", &keys)?
+                                && ui::confirm(&format!("删除 {} 的 {}？", item.key, keys[i]))?
+                            {
+                                store.delete_field(identity, &item.id, &keys[i])?;
+                            }
+                        }
+                        'x' if ui::confirm(&format!(
+                            "删除 {} 及其密码、字段与附件？将保留加密备份。",
+                            item.key
+                        ))? =>
+                        {
+                            store.delete(identity, &item.id)?;
+                            browser.expanded = false;
+                        }
+                        _ => {}
+                    }
                 }
             }
+            Ok(())
+        })();
+        if let Err(error) = operation {
+            eprintln!("{}", ui::color(&ui::clean(&error.to_string()), "31"));
+            let _ = ui::input("回车返回 ");
         }
     }
+}
+fn new_record(store: &Store) -> Result<()> {
+    let Some(kind) = ui::choose(
+        "新增",
+        &["账号".into(), "基础信息字段".into(), "事件".into()],
+    )?
+    else {
+        return Ok(());
+    };
+    let name = ui::input(if kind == 1 {
+        "字段名称: "
+    } else {
+        "名称: "
+    })?;
+    if name.is_empty() {
+        return Ok(());
+    }
+    if kind == 1 && store::sensitive(&name) {
+        anyhow::bail!("机密请在条目内选择添加字段，使用受保护输入");
+    }
+    let value = ui::input(if kind == 0 {
+        "登录名 / 邮箱 / 手机号: "
+    } else {
+        "内容: "
+    })?;
+    let note = ui::input("备注: ")?;
+    match kind {
+        0 => store.create_account(&name, &value, &note)?,
+        1 => {
+            let cat = ui::input("维度（例如 id-info / contact / work）: ")?;
+            store.put(
+                store.identity,
+                if cat.is_empty() { "id-info" } else { &cat },
+                &name,
+                &value,
+                &note,
+            )?;
+        }
+        _ => store.event(store.identity, &name, &format!("{value}\n{note}"))?,
+    }
+    Ok(())
+}
+fn edit_field(store: &Store, item: &Item, key: Option<&str>) -> Result<()> {
+    let key = match key {
+        Some(k) => k.to_string(),
+        None => ui::input("字段名称: ")?,
+    };
+    if key.is_empty() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        item.category != "info"
+            || !matches!(
+                key.as_str(),
+                "UserName" | "URL" | "Title" | "Password" | "Notes"
+            ),
+        "基础信息请使用自定义字段名"
+    );
+    let existing = item.fields.iter().find(|f| f.name == key);
+    let protected = store::sensitive(&key) || existing.is_some_and(|f| f.value.is_none());
+    let secret = if protected {
+        true
+    } else {
+        let Some(kind) = ui::choose("字段类型", &["普通文字".into(), "受保护内容".into()])?
+        else {
+            return Ok(());
+        };
+        kind == 1
+    };
+    let password = if secret {
+        store.session.unlock(
+            &crate::identity::vault(store.project, store.identity)?,
+            true,
+        )?;
+        Some(ui::secret("字段内容: ")?)
+    } else {
+        None
+    };
+    let plain = if secret {
+        String::new()
+    } else {
+        ui::input("字段内容: ")?
+    };
+    let value = match &password {
+        Some(p) => std::str::from_utf8(p.bytes())?,
+        None => &plain,
+    };
+    let category = if item.category == "info" {
+        ui::input(if existing.is_some() {
+            "维度（Enter 保留，- 清空）: "
+        } else {
+            "维度: "
+        })?
+    } else {
+        String::new()
+    };
+    let note = ui::input(if existing.is_some() {
+        "字段备注（Enter 保留，- 清空）: "
+    } else {
+        "字段备注: "
+    })?;
+    let keep = |input: String, old: &str| {
+        if input == "-" {
+            String::new()
+        } else if input.is_empty() {
+            old.into()
+        } else {
+            input
+        }
+    };
+    let category = keep(
+        category,
+        existing.map(|f| f.category.as_str()).unwrap_or(""),
+    );
+    let note = keep(note, existing.map(|f| f.note.as_str()).unwrap_or(""));
+    store.field(&item.id, &key, value, secret, &category, &note)
+}
+fn attachment(store: &Store, item: &Item, import: bool) -> Result<()> {
+    use crate::kdbx;
+    use std::path::PathBuf;
+    let vault = crate::identity::vault(store.project, store.identity)?;
+    store.session.unlock(&vault, true)?;
+    let _lock = kdbx::WriteLock::acquire(store.project, store.identity)?;
+    let (operation, args) = if import {
+        let source = PathBuf::from(ui::input("本地文件路径: ")?);
+        anyhow::ensure!(source.is_file(), "文件不存在");
+        let name = source
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow::anyhow!("文件名无效"))?;
+        if item.attachments.iter().any(|n| n == name)
+            && !ui::confirm("覆盖同名附件？将保留加密备份。")?
+        {
+            return Ok(());
+        }
+        kdbx::backup(store.project, store.identity)?;
+        (
+            "attachment-import",
+            vec![
+                item.title(),
+                name.into(),
+                source.to_string_lossy().into_owned(),
+            ],
+        )
+    } else {
+        let Some(i) = ui::choose("导出附件", &item.attachments)? else {
+            return Ok(());
+        };
+        if !ui::confirm("附件将解密写入项目 exports 目录，继续？")? {
+            return Ok(());
+        }
+        let name = &item.attachments[i];
+        anyhow::ensure!(
+            std::path::Path::new(name)
+                .file_name()
+                .is_some_and(|n| n == std::ffi::OsStr::new(name)),
+            "附件名称包含路径，请用 KeePassXC 导出"
+        );
+        let folder = store.project.root.join("exports").join(store.identity);
+        store.project.contained(&folder)?;
+        crate::private_dir(&folder)?;
+        let target = folder.join(name);
+        store.project.contained(&target)?;
+        anyhow::ensure!(!target.exists(), "目标文件已存在，未覆盖");
+        (
+            "attachment-export",
+            vec![
+                item.title(),
+                name.into(),
+                target.to_string_lossy().into_owned(),
+            ],
+        )
+    };
+    store.session.run(&vault, operation, &args, &[])?;
+    #[cfg(unix)]
+    if !import {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&args[2], std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn pagination_keeps_all_records_and_expansion_keeps_full_notes() {
-        let item = Item {
-            id: 1,
-            category: "work".into(),
-            key: "职位".into(),
-            value: "工程师".into(),
-            note: "长备注\n".repeat(40),
-            link: None,
+    fn pagination_and_expansion_keep_complete_native_notes() {
+        let xml = format!(
+            "<KeePassFile><Root><Group><Entry><UUID>test</UUID><IconID>9</IconID><String><Key>Title</Key><Value>基础信息</Value></String><String><Key>Notes</Key><Value>{}</Value></String></Entry></Group></Root></KeePassFile>",
+            "长备注\n".repeat(40)
+        );
+        let document = crate::kdbx::Document {
+            root: crate::kdbx::parse(xml.as_bytes()).unwrap(),
+            fingerprint: [0; 32],
+            deletions: Vec::new(),
+            original_paths: Default::default(),
         };
-        let records = vec![
-            Record {
-                item: Some(item.clone()),
-                title: "职位".into(),
-                status: String::new(),
-                linked: 0
-            };
-            40
-        ];
+        let items = store::snapshot(&document);
+        let one = store::records(&items, &BTreeMap::new(), "all", "")[0].clone();
+        let records = vec![one; 40];
         let pages = batches(&records, 24);
-        assert_eq!(pages.iter().map(|p| p.len()).sum::<usize>(), 40);
-        let (body, _) = render(&records[..1], &[item], 0, true, 40);
+        assert_eq!(pages.iter().map(|r| r.len()).sum::<usize>(), 40);
+        let (body, _) = render(&records[..1], &items, 0, true, 40);
         assert_eq!(body.iter().filter(|l| l.contains("长备注")).count(), 40);
-        let details = body.iter().position(|l| l.contains("┌ 详情")).unwrap();
-        assert!(!body[details..].iter().any(|l| l.contains("…")));
+        let start = body.iter().position(|l| l.contains("┌ 详情")).unwrap();
+        assert!(!body[start..].iter().any(|l| l.contains('…')));
     }
 }

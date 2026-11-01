@@ -93,19 +93,19 @@ pub fn read_secret(project: &Project, key: &str) -> Result<Option<Secret>> {
     let bytes = Zeroizing::new(fs::read(path)?);
     let text = std::str::from_utf8(&bytes).context("机密配置必须是 UTF-8")?;
     for line in text.lines() {
-        if let Some((k, v)) = line.trim().split_once('=') {
-            if k.trim() == key {
-                let v = v.trim();
-                let v = if v.len() >= 2
-                    && (v.starts_with('"') && v.ends_with('"')
-                        || v.starts_with('\'') && v.ends_with('\''))
-                {
-                    &v[1..v.len() - 1]
-                } else {
-                    v
-                };
-                return Ok(Some(Secret::from_bytes(v.as_bytes().to_vec())));
-            }
+        if let Some((k, v)) = line.trim().split_once('=')
+            && k.trim() == key
+        {
+            let v = v.trim();
+            let v = if v.len() >= 2
+                && (v.starts_with('"') && v.ends_with('"')
+                    || v.starts_with('\'') && v.ends_with('\''))
+            {
+                &v[1..v.len() - 1]
+            } else {
+                v
+            };
+            return Ok(Some(Secret::from_bytes(v.as_bytes().to_vec())));
         }
     }
     Ok(None)

@@ -176,12 +176,14 @@ impl Session {
         result
     }
 
-    pub fn import_xml(
+    pub fn merge_xml(
         &self,
         database: &Path,
         xml: &Path,
-        target: &Path,
-        title: &str,
+        patch: &Path,
+        staged: &Path,
+        deletions: &[String],
+        attachments: &[(String, String, [u8; 32])],
     ) -> Result<Zeroizing<Vec<u8>>> {
         self.unlock(database, false)?;
         let mut state = self.shared.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -189,17 +191,33 @@ impl Session {
         run_with(
             xml,
             "import",
-            &[target.to_string_lossy().into_owned(), "-p".into()],
+            &[patch.to_string_lossy().into_owned(), "-p".into()],
             password,
             &[password],
         )?;
-        let result = run_with(
-            target,
-            "show",
-            &["-a".into(), "Tags".into(), title.into()],
+        run_with(
+            staged,
+            "merge",
+            &["-s".into(), patch.to_string_lossy().into_owned()],
             password,
             &[],
-        );
+        )?;
+        for path in deletions {
+            run_with(staged, "rm", std::slice::from_ref(path), password, &[])?;
+        }
+        use sha2::Digest;
+        for (path, name, expected) in attachments {
+            let bytes = run_with(
+                staged,
+                "attachment-export",
+                &["--stdout".into(), path.clone(), name.clone(), "-".into()],
+                password,
+                &[],
+            )?;
+            let hash: [u8; 32] = sha2::Sha256::digest(&*bytes).into();
+            ensure!(&hash == expected, "附件保存校验失败，原密码库保留");
+        }
+        let result = run_with(staged, "export", &[], password, &[]);
         state.last_used = Instant::now();
         self.shared.1.notify_all();
         result
@@ -251,8 +269,8 @@ pub fn run_with(
             Ok(result)
         })
     }
-    let limit = if operation == "export" {
-        16 * 1024 * 1024
+    let limit = if matches!(operation, "export" | "attachment-export") {
+        64 * 1024 * 1024
     } else {
         1024 * 1024
     };

@@ -6,6 +6,7 @@ pub mod config;
 pub mod grants;
 pub mod identity;
 pub mod import;
+mod kdbx;
 pub mod maintenance;
 pub mod security;
 pub mod store;
@@ -26,7 +27,7 @@ impl Project {
     pub fn open(path: &Path) -> Result<Self> {
         let root = path.canonicalize().context("项目目录不存在")?;
         anyhow::ensure!(
-            root.join("template/data/schema.sql").is_file(),
+            root.join("template").is_dir() && root.join("config").is_dir(),
             "请在 ID 项目目录运行，或使用 --root 指定目录"
         );
         Ok(Self { root })

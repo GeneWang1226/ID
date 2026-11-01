@@ -124,8 +124,11 @@ fn password(
     ) {
         Ok(output) => output,
         Err(_) => {
-            let path = store::select_password(project, identity, title, session)?
-                .ok_or_else(|| anyhow::anyhow!("已取消"))?;
+            let path = match store::resolve_path(project, identity, title, session)? {
+                Some(path) => Some(path),
+                None => store::select_password(project, identity, title, session)?,
+            }
+            .ok_or_else(|| anyhow::anyhow!("已取消"))?;
             session.run(
                 &vault,
                 "show",
@@ -199,8 +202,12 @@ pub fn pass(
             .run(&vault, "clip", &[title.clone(), "10".into()], &[])
             .is_err()
         {
-            if let Some(title) = store::select_password(project, identity, &title, session)? {
-                session.run(&vault, "clip", &[title, "10".into()], &[])?;
+            let path = match store::resolve_path(project, identity, &title, session)? {
+                Some(path) => Some(path),
+                None => store::select_password(project, identity, &title, session)?,
+            };
+            if let Some(path) = path {
+                session.run(&vault, "clip", &[path, "10".into()], &[])?;
             }
         }
         return Ok(());

@@ -1,216 +1,81 @@
-# 操作指引
+# 使用说明
 
-日常使用看这一篇就够。安装依赖、故障排查等见 [MAINTENANCE.md](MAINTENANCE.md)。
+## 身份与解锁
 
-## 命令速查
+运行 `make manage` 后，用方向键选择身份，Enter 解锁。也可用 `make manage id=example` 直接打开。各身份使用独立 KDBX；同一进程只缓存当前库的主密码，切换库、退出、锁定或空闲五分钟会清除缓存。
 
-全部在 `~/ID` 下执行，输入 `make help` 可随时查看。参数统一用 `id=` 指身份；**任何参数都可以不给，缺的会逐个询问**。选择已有身份时可用 ↑/↓ 高亮、Enter 确认；比如 `make pass-add` 会先选身份，再问标题、用户名和主密码。
+`make new id=example` 会让你设置并确认主密码，完成后自动在原生 `ID_info` 群组创建 `example` 基础信息条目，填入“身份名”。没有共享初始密码；输入为空、不一致或取消时不创建身份。已有库不会因再次执行 `make new` 被覆盖或重置。
 
-> 提交代码或开启同步前，先跑 `make check` 自检：ignore 规则、git 追踪、权限、明文机密一次查完。
+## TUI
 
-| 命令 | 作用 |
+| 按键 | 操作 |
 | --- | --- |
-| `make new id=gene` | 新增身份 |
-| `make passwd id=gene` | 修改某身份 kdbx 主密码 |
-| `make pass id=gene title="..."` | 复制密码；SSH 复制无效时输入 `v`、Enter 回退明文显示 |
-| `make pass-show id=gene title="..."` | 在当前交互终端明文显示密码，会留在终端记录 |
-| `make clipboard-check` | 重新测试当前 SSH 连接的本地剪贴板，只使用测试文字 |
-| `make manage id=gene` | 分区、分页查看账号、密码与个人信息，默认 `type=all` |
-| `make manage id=gene type=account` / `type=password` / `type=info` | 只看账号 / 密码 / 个人信息 |
-| `make pass-list id=gene` | 等同 `make manage id=gene type=password` |
-| `make pass-add id=gene` | 新增条目并自动生成强密码（逐个询问标题/用户名） |
-| `make pass-add-manual` / `make pass-add-manual id=gene title="..."` | 选择账号或自定义条目，预填后手动录入密码 |
-| `make pass-edit id=gene title="..."` | 修改已有条目的密码；不提供标题时用方向键选择 |
-| `make grant id=gene title="..."` | 签发临时凭证，让 AI 不见明文地用密码 |
-| `make use token=... cmd='...'` | 用凭证代执行命令（密码经 `$ID_SECRET` 注入） |
-| `make grants` / `make revoke` | 列出活跃凭证 / 撤销（`revoke all=1` 全撤） |
-| `make web` / `make web-stop` / `make web-logs` | 启停 Web 界面、看日志 |
-| `make show id=gene` | 打印该身份的全部条目和事件 |
-| `make db` | 打开 SQLite 交互查询（退出用 `.quit`） |
-| `make item id=gene` | 写/改条目（逐个询问分类/名称/内容/备注） |
-| `make event id=gene` | 记事件（逐个询问标题/详情） |
-| `make settings` | 修改 AI 设置、API key，以及全局“明文显示密码”权限 |
-| `make ai id=jacob` / `make ai id=jacob file=资料.txt` | AI 整理资料（**先指定身份**；交互模式空行提交，显示 `AI ›` 回复与草稿，确认后才写 SQLite；密码操作由本地 KeePassXC 执行） |
-| `make check` | 安全自检（提交/同步前必跑） |
-| `make status` | 身份、条目数、Web 状态总览 |
-| `make backup` | 备份 SQLite 库到 `backups/` |
+| ↑ / ↓ | 选择条目 |
+| ← / → | 翻页 |
+| PgUp / PgDn | 翻页；展开时滚动完整详情 |
+| Enter | 展开或收起详情 |
+| 1 / 2 / 3 / 4 | 全部 / 账号 / 已填密码 / 基础信息 |
+| n | 新建账号、基础信息字段或事件 |
+| d | 基础信息按维度筛选 |
+| o | 备注、字段、密码、图标与附件操作 |
+| e / f / x | 编辑备注 / 删除字段 / 删除整条 |
+| r / l / q | 刷新 / 锁定 / 退出 |
 
-综合管理入口已命名为 `make manage`；旧的 `make list` 和 CLI `list` 仍可使用，参数保持兼容。
+账号显示登录名和密码状态，不需要再关联另一个“密码记录”。`type=password` 仅列出密码已填的账号；未填密码的账号在全部和账号视图查看。
 
-也支持全部参数一次给全（适合脚本或让 AI 代跑）：
-`make item id=gene cat=account key=proton-email value="gene@proton.me" note="主用邮箱"`
+群组标题显示 KDBX 中的实际路径，展开详情可查看所属群组。新身份的基础信息在 `ID_info/<身份名>`，后续字段继续加入同一条目；兼容旧库的 `ID/身份信息/基础信息`。账号和事件默认进入 `ID/账号`、`ID/事件`，按需创建；已有条目在原群组直接编辑。群组可在 KeePassXC 中改名，项目仍按 UUID 和原生 CustomData 识别，不会仅因改名重复建组。新建账号也可指定已有群组的完整路径，例如 `make item id=example cat=account key='工作/GitHub' value=example-user`；目标群组须已存在。
 
-## 场景一：新增一个身份
+运行 `make organize id=example` 可将已有基础信息统一为 `ID_info/example`，包括已放在旧项目群组里的条目；同时整理带项目标记的旧根条目。保留原群组及条目 UUID、字段保护、密码、附件与历史，本地解锁、确认后才会保存，并留加密备份。其他用户群组保持原位置；同名或多份基础信息冲突时中止，重复执行不会重复建条目。没有基础信息时仅填入身份名，不自动读取旧 SQLite 或档案。
 
-```bash
-make new id=gene
+除身份信息外，原生群组可按用途组织。以下是按需使用的命名建议，不会自动创建空群组或按内容猜测分类：
+
+| 群组建议 | 适合存放 |
+| --- | --- |
+| `ID_accounts` | 邮箱、网站、应用账号；用户名、密码、恢复码、应急邮箱及恢复 PDF 集中在所属条目 |
+| `ID_keys` | 独立 API 凭据、SSH 密钥、证书；密钥使用受保护字段或附件 |
+| `ID_documents` | 证件、合同、恢复文档等独立资料；原文件作为原生附件 |
+| `ID_events` | 重要变更、到期或续费等事件 |
+
+这些都是普通 KeePass 群组，名称可自定；当前账号与事件默认仍使用已有的 `ID/账号`、`ID/事件`。普通字段、受保护属性、附件都属于条目，群组只是分类，不提供额外的访问隔离。相关数据能力见 [KeePassXC 用户指南](https://keepassxc.org/docs/KeePassXC_UserGuide#_advanced_entry_handling)。
+
+个人信息保存在“基础信息”的自定义字段。Enter 展开后能看到完整值、维度与备注；“编辑字段”修改已有值，“添加字段”增加属性。恢复码、密钥等选择“受保护内容”，输入不回显，详情中只显示掩码。需要查看这类受保护自定义字段时使用 KeePassXC；本版 TUI 不提供它们的明文查看或复制入口。
+
+图标选择与 KeePass 标准编号对应；其他客户端改变标准图标后刷新即可显示。自定义图片原样保留，在 TUI 中以原生备用图标和“自定义图标”说明表示。
+
+## 密码与剪贴板
+
+```sh
+make pass id=example title=GitHub
+make pass-add-manual id=example title=GitHub
+make pass-edit id=example title=GitHub
+make pass-add id=example title=GitHub
+make clipboard-check
 ```
 
-然后做三件事：
+录入密码时，已有空密码账号直接补填，不新增重复条目；替换已有密码会重新验证。`pass-add` 在本地生成 32 位随机密码。
 
-1. 填 `identities/gene/profile.md`（档案与喜好）
-2. `make passwd id=gene` 把空白库改成该身份自己的主密码（第一条提示输 `config/secrets/.secrets.env` 里的初始密码）
-3. 有身份专属规则就补 `identities/gene/AGENTS.md`
+SSH 下使用 OSC 52 适配本地终端，并提供人工粘贴自测。终端支持不能仅靠环境变量可靠判断。无法复制时不会声称成功；可在 `make settings` 允许明文显示，并随时撤销。明文显示会进入终端滚屏记录。
 
-同一身份要开多个「分身」（多个手机号、多套银行卡）：`make new id=gene_2`，在 `profile.md` 写明用途。
+## 附件
 
-## 场景二：刚注册了一个账号
+展开条目，按 `o` 选择导入附件，输入本机文件路径；文件加密存入 KDBX。PDF 等文件不必先提取成文字。导出附件需要再次验证和确认，写到项目的 `exports/<身份>/`，不会自动同步。远端 SSH 只能访问远端文件；本地文件应先通过 SFTP 等工具上传，再导入。
 
-三步，密码和信息分开存：
+## AI
 
-1. **密码 → kdbx（自己操作）**：`make pass-add id=gene`，按提示输标题和用户名，自动生成 20 位强密码，把它填到注册页面；已有密码用 `make pass-add-manual`
-2. **账号信息 → SQLite（可让 AI 代劳）**：`make item id=gene`，按提示逐项填
-3. **记一笔事件**：`make event id=gene`
+`make ai` 打开全屏助手。空行提交，`/lock` 锁定，`/quit` 退出；模型细节默认折叠，可按 F2 查看。
 
-参数通过环境变量进入 Rust，SQL 使用绑定参数；包含空格或引号的值仍须遵守 shell 引号规则。
+AI 可按请求查询普通资料和账号是否已填密码；姓名、电话等写入基础信息，具体服务账号写入独立条目。草稿确认后才保存。没有提供登录名时，会提供本地账号表单；密码在本地录入。受保护字段、附件内容及密码不送给模型，不要在聊天中输入它们。
 
-在 `make ai` 中说“保存一个 Telegram 的账号”，即使还没提供登录名，也会显示预填命令 `make item id=gene cat=account key=Telegram` 和“填写账号”选项。选择后在本地填写登录名、邮箱或手机号以及备注，再选择录入密码、关联已有密码或暂不设置；成功录入的密码会自动关联账号。表单输入不会追加到模型对话中，未填写账号前不会创建空记录；已有同名账号会保留，使用 `make manage type=account` 管理。
+AI 代用密码仍通过 `make grant` / `make use` 临时授权，凭据不放命令参数。详见维护文档。
 
-AI 助手使用全屏界面，上方保留对话、回复和草稿，下方固定输入框或操作选项。空行提交，↑/↓ 选择操作，Enter 确认，PgUp/PgDn 滚动；F2 切换模型 JSON 和思考详情，默认收起。输入 `/lock` 锁定密码库、`/quit` 退出，也可用 Esc 或 Ctrl+C 退出。设置和密码录入完成后返回对话；退出会恢复原终端画面。明文密码只在独立查看画面中显示，按 Enter 返回，不进入对话记录。
+## 命令写入普通资料
 
-询问“哪些账号没配置密码”或已有个人信息时，AI 可调用只读 `manage` 工具，按需把当前身份的非机密资料和账号密码状态提供给配置的模型，再生成回答。工具与管理界面共用资料读取逻辑，每页 50 条；不提供密码明文、密码库路径或其他身份的数据，也不能执行命令或修改资料。“未关联”只表示没有关联记录，不代表密码库中没有密码。电话号码归“个人信息 → 联系方式”；用手机号登录的 Telegram 等服务账号仍归“账号”。写入草稿依然需要确认。
-
-### 查看账号、密码与个人信息
-
-账号和个人信息存在 SQLite，密码存在 KDBX。统一入口默认显示全部，分为账号、密码、个人信息三个平级区域：
-
-```bash
-make manage id=gene
-make manage id=gene type=account
-make manage id=gene type=info
-make manage id=gene type=password
-make manage id=gene type=info cat=work
+```sh
+make item id=example cat=id-info key=姓名 value='Example Name' note='常用姓名'
+make item id=example cat=contact key=电话号码 value='5550100' note='工作号码'
+make item id=example cat=account key=GitHub value=example-user note='开发账号'
+make event id=example title='更新恢复方式' detail='已在本地核对'
+make show id=example
 ```
 
-↑/↓ 选择记录，←/→ 翻页，Enter 在该行下方展开详情，再次 Enter 收起。详情完整显示内容和备注，按中文列宽换行；超出屏幕时用 PgUp/PgDn 滚动。未展开时 PgUp/PgDn 翻页。1/2/3/4 切换全部、账号、密码、个人信息，d 选择个人信息维度，r 刷新，q 退出。标题和选择标记使用青色，已设密码绿色，空密码黄色，字段名青色、辅助信息灰色，正文正常亮度，删除入口红色；设置 `NO_COLOR=1` 可关闭颜色。
-
-账号区直接显示登录名或邮箱，以及关联密码的状态：“已设置”“未填密码”“状态未知”。“未关联”表示尚未选择对应的 KDBX 条目，不代表没有密码；“条目不存在”表示关联路径已失效。账号可新增密码并自动关联，也可关联已有密码。密码区只列 KDBX 里的实际条目；选中后可修改密码。
-
-个人信息按维度分组，例如地址、联系方式、偏好、身份信息、工作、教育；分类名不受此清单限制，可记录任意非机密属性。`cat=` 和 d 只筛选个人信息，选“全部维度”可恢复。写入仍使用 `make item`，例如：
-
-```bash
-make item id=gene cat=work key=职位 value=工程师 note=远程办公
-make item id=gene cat=preference key=语言 value=中文 note=日常沟通
-```
-
-展开后按 e 编辑备注（密码区为修改密码），o 打开操作菜单。备注输入时 Enter 保留原值，输入 `-` 清空。编辑导入账号的备注会保留原表来源、服务商和密码关联；密码备注仍由 KeePassXC 管理。
-
-展开后按 f 删除单个备注字段或密码关联，按 x / Delete 删除整条记录；操作菜单也提供这些入口。删除确认默认选中“取消”。删除账号或个人信息只删除本身份的 SQLite 记录和关联，不删除 KDBX 密码。删除密码条目会再次验证主密码，先将加密密码库备份到 `backups/password-deletions/<身份>/`，再删除条目及其内容并解除本身份的关联；账号资料保留。回收站路径存在歧义时会停止继续删除，保留备份并提示使用 KeePassXC 处理。
-
-**关联资料与密码**：在账号或个人信息区选中记录，Enter 展开 → o 操作 → “关联密码”，再选实际 KDBX 条目。多条资料可关联同一条密码，选择后的关联会保存到 SQLite；原资料内容保留。已关联的资料可直接修改对应密码或解除关联。关联按当前身份和条目路径保存；KDBX 中移动或改名后，需要重新关联。
-
-`type=info` 无需解锁或安装 KeePassXC；`type=account` 仅在有密码关联时解锁以检查状态。清单只让 KeePassXC 本地检查空/非空密码，返回路径，不导出密码。主密码仅通过 stdin 交给 KeePassXC，不落盘或写入参数；同一次状态检查会在内部解锁数次，界面切换复用本次结果。r 刷新或修改密码后会重新检查。解锁失败会报错，无法确定状态时显示“状态未知”。
-
-账号可以使用独立显示名，结构化备注中的 `label` 优先于服务商和资料名称；邮箱地址、登录名和密码路径仍分别保存，不靠改名来推断关联。
-
-### 会话解锁
-
-`make ai` 选定身份后，若本机有该身份的密码库，会先解锁一次；`make manage` 则在首次需要密码状态时解锁。普通查询、标题搜索、复制和新增条目复用本次解锁；新增时仍需要输入新条目密码。明文显示（包括复制失败后的 `v` 回退）和修改已有密码会再次验证主密码。
-
-主密码只保存在当前 Rust 进程的内存里，通过 stdin 交给本机 KeePassXC，不写入文件、环境变量、命令行或模型请求。切换密码库会清除旧缓存；空闲 5 分钟即清除缓存，下次操作需重新解锁；退出会话会释放缓存。独立运行的其他 `make` 命令是新会话，修改密码库主密码、签发凭证等入口仍各自验证。在 AI 输入中使用 `/lock` 可立即锁定本次会话，该指令不发送给模型。`type=info` 不受会话解锁影响。
-
-主密码缓存使用 `zeroize`，退格、锁定、到期和正常退出会擦除持有的缓冲区。Rust 的内存安全不能阻止内存转储或清理 KeePassXC、操作系统中的所有副本。
-
-### 补填和修改密码
-
-```bash
-make pass-add-manual id=gene
-make pass-edit id=gene
-```
-
-`pass-add-manual` 可选择已有 `account` 资料预填，或自定义条目。优先使用已关联的条目路径、再使用结构化备注的 `password_title`，否则使用资料名称；用户名取备注的 `username`、邮箱格式的资料名称或账号值。录入成功后会将选中的资料关联到该条目。已有同名条目会拒绝覆盖；修改用 `pass-edit`，未指定 `user=` 时保留原用户名。指定 `title=` 可直接录入，`make ai` 的预填命令继续有效。这些操作只更新本地密码库，不会更改网站或服务器端的密码。
-
-### 导入邮箱表
-
-在本机导入 Excel 邮箱表，无需模型或网络：
-
-```bash
-target/debug/id import '/路径/邮箱.xlsx'
-# 使用者名称与身份不同时，明确指定归属（可重复）：
-target/debug/id import '/路径/邮箱.xlsx' --owner '表中使用者=gene'
-make pass-list
-make pass-add-manual
-```
-
-表头依次为“分类、服务商、使用者、账号、备注、密码备注、详细数据”。前五列整理到 SQLite，账号按身份和邮箱地址去重；未确认的使用者会跳过并提示。原表和导入前的 SQLite 备份保存在 `backups/mail-imports/`，文件权限 600，不进 git 或 Syncthing。**原表备份仍含未加密的机密字段**，保留期间请保护这台设备。
-
-导入后的邮箱进入统一账号清单，预填标题为 `邮箱 - 完整邮箱地址`，用户名为邮箱地址。通过 `make pass-add-manual` 选择账号、录入密码，也可选择“仅补录原表资料”重试补充资料。
-
-密码保存后，可将此邮箱对应的“密码备注、详细数据”作为 `原表补充资料.txt` 附件加密存入同一条目，同一会话可复用解锁。这些字段不显示在终端，不写入 SQLite，不通过命令行参数或 AI 传递。Linux 上附件通过匿名内存文件交给 KeePassXC，不写普通磁盘临时文件。原表只在导入设备保留；其他设备仍能录入密码，补充资料需回原设备录入后再同步 kdbx。确认全部资料已入库后，可自行清理含机密的原表与其备份。
-
-### 用 AI 整理（`make ai`）
-
-先运行 `make settings` 设置模型、接口地址、思考模式和 API key。非敏感设置写入可同步的 `config/config.toml`，API key 写入权限为 600 的 `config/secrets/.secrets.env`。然后运行 `make ai`，用方向键选择身份，粘贴杂乱资料并输入空行提交；也可以用 `make ai id=gene file=资料.txt`；文件须位于项目内，身份目录、机密配置和备份目录不可作为模型输入。AI 会先打印 `AI ›` 回复和条目/事件草稿，**确认后才写库**；要保存新机密时会给出带预填标题的 `make pass-add-manual` 命令，按回车可直接进入密码录入；要查看已有机密时会给出 `make pass` 命令，将密码复制到剪贴板。密码内容仍由你在终端输入或粘贴。
-
-新设备先执行 `cp config/secrets/.secrets.env.example config/secrets/.secrets.env && chmod 600 config/secrets/.secrets.env`，再运行 `make settings` 输入 API key。旧 `docker/.env` 中的 `ai_api_key` 和 `kdbx_initial_password` 迁移到 `config/secrets/.secrets.env` 后即可删除旧值；Rust CLI 不再读取 Docker 中的旧秘密设置。
-
-首次在 SSH 连接中运行 `make ai` 或复制密码时，会做一次剪贴板自测：发送无敏感的测试文字，请你粘贴到隐藏输入框并按 Enter；不能粘贴就直接 Enter，`q` 可跳过。测试会覆盖当前剪贴板。未通过或跳过时，程序先显示全局提示；未通过时不再向该连接尝试发送密码，可选择明文查看（须已允许）。自测不解锁密码库，不查询本地剪贴板内容，也不会保存粘贴的文字。仅缓存本次连接的检测结果，换一个 SSH 连接会重新检测；可随时运行 `make clipboard-check` 重测。
-
-保存密码后，可继续请求复制或运行 `make pass id=gene title="GitHub 账户密码"`。SSH 下会发送 OSC 52 复制请求，请在 10 秒内粘贴，之后发送清空请求。复制无效时，在同一提示中输入 `v` 并按 Enter 即可明文显示，不需要退出 SSH 或另开本地管道。直接 Enter、超时或 Ctrl+C 都不会显示明文。自测成功只确认当时可用，不能保证每次复制均成功。
-
-AI 菜单也可直接选择“明文显示密码”，等价于 `make pass-show id=gene title="GitHub 账户密码"`。明文只显示在当前终端，不回传给模型，不写入 AI 对话或项目日志，但可能保留在终端滚屏或外部会话录制中。两种显示入口均拒绝非交互式终端和输出重定向。
-
-`title=` 优先按密码库中的完整标题或分组路径查询。查询失败时，`make pass` 和 `make pass-show` 可选择“搜索已有条目标题”，用方向键选择实际条目后重试；例如 `title='查一下我的github密码'` 会按 GitHub 匹配 `GitHub 账户密码` 等已有标题，多个匹配始终由你选择。搜索只在本地列出标题，不发送给模型，也不会新增或修改密码。同一进程内的搜索和重试复用本次会话解锁。
-
-**随时撤销明文权限**：`make settings` → “明文显示密码”切换为“禁止” → 保存并退出。设置写入 `config/config.toml` 的 `[terminal].allow_plaintext`；AI 菜单、`make pass-show` 和 `v` 回退都受这个开关控制。显示前会重新读取配置，因此已打开的会话也会遵守撤销。关闭开关不能清除已经显示过的终端记录；配置缺失或无效时默认禁止明文显示。
-
-再次运行 `make settings` 即可热加载修改后的 `config/config.toml`，无需重启 CLI；Web 使用同一份非敏感配置。
-
-- 云端 API（默认阿里云百炼 `qwen-plus`）：整理质量稳，但**只发非机密资料，绝不粘贴密码/授权码/助记词**
-- 本地模型：运行 `make settings` 把接口改为 `http://localhost:11434/v1`、模型改为 `qwen3:8b`（需先装 Ollama），数据不出机，但小服务器上较慢
-
-## 场景三：查看和修改信息
-
-- 不想敲命令：`make web` 后开 http://localhost:3000 （访问密码在 `docker/.env` 的 `WEB_PASSWORD`）
-- **AI 助手**：Web 左侧「✦ AI 助手」进对话页——粘贴资料或附加文本文件，AI 整理成条目/事件草稿，**勾选确认后才写库**；机密只列提醒。对话和草稿都存库可回看，每条回复可展开「模型原始输出」。API key 来自 `config/secrets/.secrets.env`，接口和模型来自 `config/config.toml`。
-- 命令行：`make db` 进 SQLite 交互模式，查询示例见 `template/data/schema.sql` 末尾注释
-
-## 场景四：让 AI 用密码干活（分级授权）
-
-原则：**AI 永远看不到明文密码**，只能拿到一个临时凭证 token，由本地 Rust CLI把密码注入子进程执行，输出自动打码。
-
-1. AI 说需要某个账号的密码时，你在终端签发凭证：
-
-```bash
-make grant id=jacob title="126 授权码 jacob_ng"     # 输一次主密码
-# 输出一个 token 和过期时间，把 token 发给 AI
-```
-
-2. AI 用凭证代执行（密码经 `$ID_SECRET` 环境变量传给命令，不进参数、不显示）：
-
-```bash
-make use token=<token> cmd='printf "Authorization: Bearer %s\n" "$$ID_SECRET" | curl --header @- https://example.com'
-# 经 make 传参时 $ 要写成 $$。秘密必须经 stdin 或环境传递，勿展开到外部命令的参数中。
-```
-
-3. 随时 `make grants` 看活跃凭证，`make revoke token=...` 或 `make revoke all=1` 撤销。
-
-**分级**（给条目打 Tag：`make tag id=jacob title="..." tags=ai-deny`，或在 KeePassXC 图形客户端打）：
-
-| Tag | 行为 | 适合 |
-| --- | --- | --- |
-| （无标签） | 一次性凭证，用一次即销毁（默认 5 分钟有效） | 大多数账号 |
-| `ai-auto` | 限时凭证，TTL 内可多次使用（默认 10 分钟，`ttl=` 可调，上限 1 小时） | 低价值、AI 常用的账号 |
-| `ai-deny` | 拒绝签发，只能 `make pass` 复制剪贴板或手动输入 | 主邮箱、金融、恢复码 |
-
-代执行只应授权给可信命令：输出会替换完全相同的秘密字节，不能阻止命令变换或外传秘密。
-
-凭证放在用户级 tmpfs（`/run/user/<uid>/id-grants/`），**重启即清空**；日志只记操作和身份，绝不记密码。
-
-> 网页表单等代执行够不到的场景：AI 会请你 `make pass` 复制到剪贴板（10 秒自动清空）后手动粘贴。
-
-## 场景五：换一台新设备
-
-1. 装 Rust、C 编译器、make、KeePassXC、Docker、Syncthing（见 [MAINTENANCE.md](MAINTENANCE.md)）
-2. `git clone <私有仓库> ~/ID` 拿到源码、模板和文档，再运行 `make build`
-3. Syncthing 把 `~/ID` 加为同步文件夹，等 `identities/`、`data/id.db` 同步过来；`config/config.toml` 由 git 部署
-4. 在新设备复制 `config/secrets/.secrets.env.example` 为 `config/secrets/.secrets.env`，填写 secrets 并确认权限是 `600`；复制 `docker/.env.example` 为 Docker 配置后也设为 `600`
-
-## 场景六：删除一个身份
-
-先确认，再执行：
-
-```bash
-rm -rf identities/<身份名>
-sqlite3 data/id.db "DELETE FROM items WHERE identity='<身份名>'; DELETE FROM events WHERE identity='<身份名>';"
-```
+这些命令会在本地解锁 KDBX，只用于普通资料。机密字段请使用管理界面的受保护输入。`show` 不显示密码或受保护字段的值。

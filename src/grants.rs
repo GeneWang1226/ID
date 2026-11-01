@@ -135,10 +135,12 @@ pub fn grant(
     let folder = directory()?;
     cleanup_expired(&folder)?;
     let vault = identity::vault(project, identity)?;
+    let title =
+        crate::store::resolve_path(project, identity, title, session)?.context("条目不存在")?;
     let tags = session.run(
         &vault,
         "show",
-        &["-a".into(), "Tags".into(), title.into()],
+        &["-a".into(), "Tags".into(), title.clone()],
         &[],
     )?;
     let tags = std::str::from_utf8(&tags)?
@@ -155,7 +157,7 @@ pub fn grant(
     let mut password = session.run(
         &vault,
         "show",
-        &["-s".into(), "-a".into(), "Password".into(), title.into()],
+        &["-s".into(), "-a".into(), "Password".into(), title.clone()],
         &[],
     )?;
     if password.last() == Some(&b'\n') {
@@ -169,7 +171,7 @@ pub fn grant(
     file.sync_all()?;
     let meta = Meta {
         identity: identity.into(),
-        entry: title.into(),
+        entry: title,
         expires: now() + duration,
         oneshot,
     };
@@ -226,10 +228,10 @@ pub fn revoke(project: &Project, token: Option<&str>, all: bool) -> Result<()> {
     if all {
         for entry in fs::read_dir(&folder)? {
             let path = entry?.path();
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                if valid_token(stem).is_ok() {
-                    remove(&folder, stem)?;
-                }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                && valid_token(stem).is_ok()
+            {
+                remove(&folder, stem)?;
             }
         }
     } else {

@@ -1,23 +1,602 @@
-use crate::{Project, identity, private_dir, private_file, ui, vault::Session};
-use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, params};
-use serde_json::{Value, json};
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
+use crate::{
+    Project, identity,
+    kdbx::{self, Document, Node, WriteLock},
+    ui,
+    vault::Session,
 };
+use anyhow::{Context, Result, ensure};
+use std::collections::BTreeMap;
 
-pub struct Store {
-    pub db: Connection,
+pub struct Store<'a> {
+    pub project: &'a Project,
+    pub identity: &'a str,
+    pub session: &'a Session,
+}
+#[derive(Clone, Debug)]
+pub struct Field {
+    pub name: String,
+    pub value: Option<String>,
+    pub category: String,
+    pub note: String,
 }
 #[derive(Clone, Debug)]
 pub struct Item {
-    pub id: i64,
+    pub id: String,
     pub category: String,
     pub key: String,
     pub value: String,
     pub note: String,
-    pub link: Option<String>,
+    pub path: String,
+    pub icon: u32,
+    pub group_icon: u32,
+    pub custom_icon: bool,
+    pub password_set: bool,
+    pub url: String,
+    pub fields: Vec<Field>,
+    pub attachments: Vec<String>,
+    pub public_notes: bool,
+}
+impl Item {
+    pub fn group_path(&self) -> &str {
+        self.path
+            .rsplit_once('/')
+            .map(|(group, _)| group)
+            .unwrap_or("根分组")
+    }
+    pub fn name(&self) -> String {
+        self.key.clone()
+    }
+    pub fn username(&self) -> String {
+        self.value.clone()
+    }
+    pub fn title(&self) -> String {
+        self.path.clone()
+    }
+    pub fn remark(&self) -> String {
+        self.note.clone()
+    }
+    pub fn glyph(&self) -> &'static str {
+        icon(self.icon)
+    }
+}
+pub fn icon(id: u32) -> &'static str {
+    // KeePass standard IconID order; terminal glyphs do not require a private-use font.
+    const GLYPHS: [&str; 69] = [
+        "⚿", "◎", "⚠", "▣", "▤", "☏", "▦", "✎", "⇄", "♟", "☷", "▧", "⌁", "⚿", "ϟ", "▱", "★", "◉",
+        "▣", "✉", "⚙", "☑", "▤", "▣", "⇆", "▣", "▣", "☁", "♫", "⌘", "⌘", "▥", "◴", "▶", "⚒", "◎",
+        "▧", "%", "▦", "◷", "⌕", "⌁", "▥", "♲", "▤", "✕", "?", "▧", "▰", "▱", "▣", "◈", "⚿", "✓",
+        "✎", "▧", "☷", "▦", "⚿", "⌘", "⌂", "★", "♟", "✎", "●", "W", "¤", "▣", "▯",
+    ];
+    GLYPHS.get(id as usize).copied().unwrap_or("◇")
+}
+pub const ICONS: &[(u32, &str)] = &[
+    (0, "密码"),
+    (1, "网站"),
+    (9, "身份"),
+    (22, "文档"),
+    (19, "邮箱"),
+    (30, "终端"),
+    (61, "收藏"),
+    (60, "家庭"),
+];
+pub fn sensitive(name: &str) -> bool {
+    let name = name.to_lowercase().replace([' ', '-', '_'], "");
+    [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "apikey",
+        "privatekey",
+        "recovery",
+        "backupcode",
+        "otp",
+        "seed",
+        "mnemonic",
+        "密码",
+        "密钥",
+        "恢复码",
+        "助记词",
+        "授权码",
+        "应急码",
+    ]
+    .iter()
+    .any(|w| name.contains(w))
+}
+fn public(entry: &Node, key: &str) -> String {
+    entry
+        .field(key)
+        .filter(|n| !kdbx::protected(n))
+        .map(|n| n.text.to_string())
+        .unwrap_or_default()
+}
+fn group_roles(doc: &Document) -> BTreeMap<String, String> {
+    doc.groups()
+        .into_iter()
+        .filter(|(_, g)| !g.meta("ID.Group").is_empty())
+        .map(|(path, g)| (path, g.meta("ID.Group").to_owned()))
+        .collect()
+}
+fn entry_kind<'a>(entry: &'a Node, path: &str, groups: &BTreeMap<String, String>) -> &'a str {
+    match entry.meta("ID.Kind") {
+        "info" => "info",
+        "event" => "event",
+        "account" => "account",
+        _ => match path.rsplit_once('/').map(|(parent, _)| parent) {
+            Some(parent)
+                if groups.get(parent).is_some_and(|k| k == "info") || parent == "ID/身份信息" =>
+            {
+                "info"
+            }
+            Some(parent)
+                if groups.get(parent).is_some_and(|k| k == "event") || parent == "ID/事件" =>
+            {
+                "event"
+            }
+            _ => "account",
+        },
+    }
+}
+pub(crate) fn information_id(doc: &Document) -> Result<Option<String>> {
+    let groups = group_roles(doc);
+    let found = doc
+        .entries()
+        .into_iter()
+        .filter(|(path, e)| entry_kind(e, path, &groups) == "info")
+        .map(|(_, e)| e.value("UUID").to_owned())
+        .collect::<Vec<_>>();
+    ensure!(
+        found.len() <= 1,
+        "存在多个基础信息条目，请在 KeePassXC 中整理后重试"
+    );
+    Ok(found.into_iter().next())
+}
+pub(crate) fn snapshot(doc: &Document) -> Vec<Item> {
+    let groups = group_roles(doc);
+    let group_icons = doc
+        .groups()
+        .into_iter()
+        .map(|(path, g)| (path, g.value("IconID").parse::<u32>().unwrap_or(48)))
+        .collect::<BTreeMap<_, _>>();
+    let mut items = doc
+        .entries()
+        .into_iter()
+        .map(|(path, e)| {
+            let title = public(e, "Title");
+            let kind = entry_kind(e, &path, &groups);
+            let fields = e
+                .children
+                .iter()
+                .filter(|s| s.name == "String")
+                .filter_map(|s| {
+                    let key = s.value("Key");
+                    if matches!(key, "Title" | "UserName" | "Password" | "URL" | "Notes") {
+                        return None;
+                    }
+                    let value = s.child("Value")?;
+                    Some(Field {
+                        name: key.into(),
+                        value: (!kdbx::protected(value) && !sensitive(key))
+                            .then(|| value.text.to_string()),
+                        category: e.meta(&format!("ID.Category:{key}")).into(),
+                        note: e.meta(&format!("ID.Note:{key}")).into(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Item {
+                id: e.value("UUID").into(),
+                category: kind.into(),
+                key: title,
+                value: public(e, "UserName"),
+                note: public(e, "Notes"),
+                icon: e.value("IconID").parse().unwrap_or(0),
+                group_icon: group_icons
+                    .get(
+                        path.rsplit_once('/')
+                            .map(|(parent, _)| parent)
+                            .unwrap_or(""),
+                    )
+                    .copied()
+                    .unwrap_or(48),
+                path,
+                custom_icon: !e.value("CustomIconUUID").is_empty()
+                    && e.value("CustomIconUUID") != "AAAAAAAAAAAAAAAAAAAAAA==",
+                password_set: !e.field_value("Password").is_empty(),
+                url: public(e, "URL"),
+                fields,
+                attachments: e
+                    .children
+                    .iter()
+                    .filter(|n| n.name == "Binary")
+                    .map(|n| n.value("Key").to_owned())
+                    .collect(),
+                public_notes: e.meta("ID.PublicNotes") == "true",
+            }
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| (&a.category, &a.key).cmp(&(&b.category, &b.key)));
+    items
+}
+pub(crate) fn put_document(
+    doc: &mut Document,
+    category: &str,
+    key: &str,
+    value: &str,
+    note: &str,
+) -> Result<()> {
+    ensure!(
+        !key.trim().is_empty() && !value.trim().is_empty(),
+        "名称和内容不能为空"
+    );
+    let category = item_category(category, key);
+    ensure!(
+        category == "account" || !sensitive(key),
+        "机密字段请在本地管理界面中录入"
+    );
+    if category == "account" {
+        let id = match doc.find_entry(key)? {
+            Some(id) => id,
+            None => doc.add(key, "account", if value.contains('@') { 19 } else { 1 })?,
+        };
+        let entry = doc.entry_mut(&id)?;
+        ensure!(
+            !matches!(entry.meta("ID.Kind"), "info" | "event")
+                && entry.field_value("Title") != "基础信息",
+            "同名基础信息条目不能覆盖为账号"
+        );
+        ensure!(
+            entry.field("UserName").is_none_or(|n| !kdbx::protected(n)),
+            "受保护登录名请在本地编辑"
+        );
+        ensure!(
+            entry.field("Notes").is_none_or(|n| !kdbx::protected(n)),
+            "受保护备注请在 KeePassXC 中编辑"
+        );
+        entry.set_field("UserName", value, false);
+        entry.set_field("Notes", note, false);
+        entry.set_meta("ID.PublicNotes", "true");
+        entry.touch();
+    } else {
+        let id = match information_id(doc)? {
+            Some(id) => id,
+            None => doc.add("基础信息", "info", 9)?,
+        };
+        let entry = doc.entry_mut(&id)?;
+        ensure!(
+            !matches!(key, "Title" | "UserName" | "Password" | "URL" | "Notes"),
+            "该名称为 KeePass 标准字段，请更换名称"
+        );
+        ensure!(
+            entry.field(key).is_none_or(|n| !kdbx::protected(n)),
+            "已有受保护字段，未覆盖"
+        );
+        entry.set_field(key, value, false);
+        entry.set_meta(&format!("ID.Category:{key}"), category);
+        entry.set_meta(&format!("ID.Note:{key}"), note);
+        entry.touch();
+    }
+    Ok(())
+}
+impl<'a> Store<'a> {
+    pub fn open(project: &'a Project, identity: &'a str, session: &'a Session) -> Result<Self> {
+        identity::vault(project, identity)?;
+        Ok(Self {
+            project,
+            identity,
+            session,
+        })
+    }
+    fn scope(&self, identity: &str) -> Result<()> {
+        ensure!(identity == self.identity, "不能访问其他身份");
+        Ok(())
+    }
+    pub fn items(&self, identity: &str) -> Result<Vec<Item>> {
+        self.scope(identity)?;
+        Ok(snapshot(&Document::load(
+            self.project,
+            identity,
+            self.session,
+        )?))
+    }
+    pub(crate) fn update<T>(&self, edit: impl FnOnce(&mut Document) -> Result<T>) -> Result<T> {
+        let _lock = WriteLock::acquire(self.project, self.identity)?;
+        let mut doc = Document::load(self.project, self.identity, self.session)?;
+        let result = edit(&mut doc)?;
+        doc.save(self.project, self.identity, self.session)?;
+        Ok(result)
+    }
+    pub fn put(
+        &self,
+        identity: &str,
+        category: &str,
+        key: &str,
+        value: &str,
+        note: &str,
+    ) -> Result<()> {
+        self.scope(identity)?;
+        self.update(|d| put_document(d, category, key, value, note))
+    }
+    pub fn create_account(&self, title: &str, user: &str, note: &str) -> Result<()> {
+        self.update(|d| {
+            ensure!(d.find_entry(title)?.is_none(), "已有同名条目，未覆盖");
+            put_document(d, "account", title, user, note)
+        })
+    }
+    pub fn event(&self, identity: &str, title: &str, detail: &str) -> Result<()> {
+        self.scope(identity)?;
+        self.batch(&[], &[(title.into(), detail.into())])
+    }
+    pub fn organize(&self) -> Result<()> {
+        let _lock = WriteLock::acquire(self.project, self.identity)?;
+        let mut doc = Document::load(self.project, self.identity, self.session)?;
+        let count = doc.organize(self.identity)?;
+        if count == 0 {
+            println!("项目条目已归组，无需整理。");
+            return Ok(());
+        }
+        if !ui::confirm(&format!(
+            "整理 {count} 项项目资料；基础信息统一到 ID_info/{}，旧项目根条目归组。先留加密备份，保留 UUID、密码、附件和历史。",
+            self.identity
+        ))? {
+            return Ok(());
+        }
+        doc.save(self.project, self.identity, self.session)?;
+        println!(
+            "已整理 {count} 项项目资料，基础信息位于 ID_info/{}。",
+            self.identity
+        );
+        Ok(())
+    }
+    pub fn batch(
+        &self,
+        items: &[(String, String, String, String)],
+        events: &[(String, String)],
+    ) -> Result<()> {
+        self.update(|d| {
+            for (cat, key, value, note) in items {
+                put_document(d, cat, key, value, note)?;
+            }
+            for (title, detail) in events {
+                ensure!(!title.trim().is_empty(), "事件标题不能为空");
+                let id = d.add(title, "event", 22)?;
+                let e = d.entry_mut(&id)?;
+                e.set_field("Notes", detail, false);
+                e.set_meta("ID.PublicNotes", "true");
+                e.touch();
+            }
+            Ok(())
+        })
+    }
+    pub fn note(&self, identity: &str, id: &str, text: &str) -> Result<()> {
+        self.scope(identity)?;
+        self.update(|d| {
+            let e = d.entry_mut(id)?;
+            ensure!(
+                e.field("Notes").is_none_or(|n| !kdbx::protected(n)),
+                "受保护备注请在 KeePassXC 中编辑"
+            );
+            e.set_field("Notes", text, false);
+            e.set_meta("ID.PublicNotes", "true");
+            e.touch();
+            Ok(())
+        })
+    }
+    pub fn field(
+        &self,
+        id: &str,
+        key: &str,
+        value: &str,
+        secret: bool,
+        category: &str,
+        note: &str,
+    ) -> Result<()> {
+        ensure!(
+            !key.trim().is_empty() && !key.chars().any(char::is_control),
+            "字段名无效"
+        );
+        ensure!(
+            !matches!(key, "Title" | "Password" | "Notes"),
+            "此标准字段请用对应操作编辑"
+        );
+        self.update(|d| {
+            let e = d.entry_mut(id)?;
+            ensure!(
+                secret || e.field(key).is_none_or(|n| !kdbx::protected(n)),
+                "不能将受保护字段改为普通文字"
+            );
+            e.set_field(key, value, secret || sensitive(key));
+            e.set_meta(&format!("ID.Category:{key}"), category);
+            e.set_meta(&format!("ID.Note:{key}"), note);
+            e.touch();
+            Ok(())
+        })
+    }
+    pub fn icon(&self, id: &str, icon: u32) -> Result<()> {
+        ensure!(icon < 69, "图标编号应为 0–68");
+        self.update(|d| {
+            let e = d.entry_mut(id)?;
+            e.set("IconID", &icon.to_string());
+            e.children.retain(|n| n.name != "CustomIconUUID");
+            e.touch();
+            Ok(())
+        })
+    }
+    pub fn delete_field(&self, identity: &str, id: &str, key: &str) -> Result<()> {
+        self.scope(identity)?;
+        ensure!(!matches!(key, "Title" | "Password"), "此字段不能直接删除");
+        self.session
+            .unlock(&identity::vault(self.project, identity)?, true)?;
+        self.update(|d| {
+            let e = d.entry_mut(id)?;
+            ensure!(e.field(key).is_some(), "字段不存在");
+            e.remove_field(key);
+            if key == "Notes" {
+                e.set_meta("ID.PublicNotes", "");
+            }
+            e.set_meta(&format!("ID.Category:{key}"), "");
+            e.set_meta(&format!("ID.Note:{key}"), "");
+            e.touch();
+            Ok(())
+        })
+    }
+    pub fn delete(&self, identity: &str, id: &str) -> Result<()> {
+        self.scope(identity)?;
+        self.session
+            .unlock(&identity::vault(self.project, identity)?, true)?;
+        self.update(|d| {
+            d.entry_mut(id)?;
+            let path = d
+                .entries()
+                .into_iter()
+                .find(|(_, e)| e.value("UUID") == id)
+                .context("条目不存在")?
+                .0;
+            ensure!(
+                d.find_path(&path)?.as_deref() == Some(id),
+                "条目路径有歧义，未删除"
+            );
+            d.deletions.push(path);
+            fn remove(n: &mut Node, id: &str) {
+                n.children
+                    .retain(|c| c.name != "Entry" || c.value("UUID") != id);
+                for c in &mut n.children {
+                    if c.name != "History" {
+                        remove(c, id);
+                    }
+                }
+            }
+            remove(&mut d.root, id);
+            Ok(())
+        })
+    }
+}
+pub fn password_states(
+    project: &Project,
+    identity: &str,
+    session: &Session,
+) -> Result<BTreeMap<String, String>> {
+    Ok(snapshot(&Document::load(project, identity, session)?)
+        .into_iter()
+        .filter(|i| i.category == "account")
+        .map(|i| {
+            (
+                i.title(),
+                if i.password_set {
+                    "已设置"
+                } else {
+                    "未填密码"
+                }
+                .into(),
+            )
+        })
+        .collect())
+}
+pub fn resolve_path(
+    project: &Project,
+    identity: &str,
+    title: &str,
+    session: &Session,
+) -> Result<Option<String>> {
+    let doc = Document::load(project, identity, session)?;
+    let Some(id) = doc.find_entry(title)? else {
+        return Ok(None);
+    };
+    let path = doc
+        .entries()
+        .into_iter()
+        .find(|(_, e)| e.value("UUID") == id)
+        .context("条目不存在")?
+        .0;
+    ensure!(
+        doc.find_path(&path)?.as_deref() == Some(id.as_str()),
+        "条目路径有歧义，请在 KeePassXC 中整理"
+    );
+    Ok(Some(path))
+}
+pub fn write_password(
+    project: &Project,
+    identity: &str,
+    title: Option<&str>,
+    username: Option<&str>,
+    edit: bool,
+    generate: bool,
+    session: &Session,
+) -> Result<String> {
+    ui::require_terminal()?;
+    let vault = identity::vault(project, identity)?;
+    let mut title = match title.filter(|t| !t.is_empty()) {
+        Some(t) => t.into(),
+        None if edit => select_password(project, identity, "", session)?.context("已取消")?,
+        None => ui::input("条目标题: ")?,
+    };
+    ensure!(
+        !title.trim().is_empty() && !title.chars().any(char::is_control),
+        "条目标题无效"
+    );
+    session.unlock(&vault, edit)?;
+    let mut doc = Document::load(project, identity, session)?;
+    let existing = doc.find_entry(&title)?;
+    let mut replace = false;
+    if let Some(id) = &existing {
+        let e = doc
+            .entries()
+            .into_iter()
+            .find(|(_, e)| e.value("UUID") == id)
+            .unwrap()
+            .1;
+        ensure!(
+            e.meta("ID.Kind") != "info" && e.field_value("Title") != "基础信息",
+            "基础信息不使用账号密码操作"
+        );
+        ensure!(e.meta("ID.Kind") != "event", "事件不使用账号密码操作");
+        replace = !e.field_value("Password").is_empty();
+        title = doc
+            .entries()
+            .into_iter()
+            .find(|(_, n)| n.value("UUID") == id)
+            .unwrap()
+            .0;
+    }
+    ensure!(!edit || existing.is_some(), "条目不存在");
+    if replace && !edit {
+        session.unlock(&vault, true)?;
+    }
+    let user = match username {
+        Some(s) => Some(s.to_owned()),
+        None if existing.is_none() => Some(ui::input("用户名（可空）: ")?),
+        None => None,
+    };
+    let password = if generate {
+        const CHARS: &[u8] =
+            b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_+";
+        let mut secret = crate::vault::Secret::empty();
+        for _ in 0..32 {
+            secret.push(&[CHARS[rand::random_range(0..CHARS.len())]])?;
+        }
+        secret
+    } else {
+        ui::secret("新条目密码: ")?
+    };
+    let _lock = WriteLock::acquire(project, identity)?;
+    let id = match existing {
+        Some(id) => id,
+        None => doc.add(&title, "account", 0)?,
+    };
+    let entry = doc.entry_mut(&id)?;
+    if let Some(user) = user {
+        entry.set_field("UserName", &user, false);
+    }
+    entry.set_field("Password", std::str::from_utf8(password.bytes())?, true);
+    entry.touch();
+    title = doc
+        .entries()
+        .into_iter()
+        .find(|(_, e)| e.value("UUID") == id)
+        .context("条目不存在")?
+        .0;
+    doc.save(project, identity, session)?;
+    println!("密码已保存。");
+    Ok(title)
 }
 
 pub fn category_label(category: &str) -> &str {
@@ -48,337 +627,6 @@ pub fn item_category<'a>(category: &'a str, key: &str) -> &'a str {
         category
     }
 }
-const INTERNAL: &[&str] = &[
-    "type",
-    "label",
-    "password_title",
-    "source",
-    "source_row",
-    "source_owner",
-    "username",
-];
-pub fn fields(note: &str) -> Vec<(String, String, String)> {
-    match serde_json::from_str::<Value>(note) {
-        Ok(Value::Object(values)) => values
-            .into_iter()
-            .filter(|(k, v)| !INTERNAL.contains(&k.as_str()) && !v.is_null() && v != "")
-            .map(|(k, v)| {
-                let label = match k.as_str() {
-                    "provider" => "服务商",
-                    "region" => "地区",
-                    "purpose" | "text" => "备注",
-                    _ => &k,
-                }
-                .to_owned();
-                (
-                    format!("meta:{k}"),
-                    label,
-                    v.as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| v.to_string()),
-                )
-            })
-            .collect(),
-        _ if !note.is_empty() => vec![("note".into(), "备注".into(), note.into())],
-        _ => Vec::new(),
-    }
-}
-impl Item {
-    pub fn metadata(&self) -> Value {
-        serde_json::from_str(&self.note).unwrap_or(Value::Null)
-    }
-    pub fn name(&self) -> String {
-        let meta = self.metadata();
-        meta.get("label")
-            .or_else(|| meta.get("provider"))
-            .and_then(Value::as_str)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(&self.key)
-            .to_owned()
-    }
-    pub fn username(&self) -> String {
-        self.metadata()
-            .get("username")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                if self.key.contains('@') && !self.key.contains(':') {
-                    self.key.clone()
-                } else {
-                    self.value.clone()
-                }
-            })
-    }
-    pub fn title(&self) -> String {
-        self.link
-            .clone()
-            .or_else(|| {
-                self.metadata()
-                    .get("password_title")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| self.key.clone())
-    }
-    pub fn remark(&self) -> String {
-        let v = self.metadata();
-        if v.is_object() {
-            v.get(if v["type"] == "mail-account" {
-                "purpose"
-            } else {
-                "text"
-            })
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .into()
-        } else {
-            self.note.clone()
-        }
-    }
-}
-
-impl Store {
-    pub fn open(project: &Project) -> Result<Self> {
-        let path = project.root.join("data/id.db");
-        project.contained(&path)?;
-        // SQLite 与 Web 共用，保留既有目录及文件权限。
-        fs::create_dir_all(path.parent().unwrap())?;
-        let db = Connection::open(path)?;
-        db.busy_timeout(std::time::Duration::from_secs(5))?;
-        db.execute_batch("PRAGMA foreign_keys=ON;")?;
-        db.execute_batch(include_str!("../template/data/schema.sql"))?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS password_links(item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,entry_path TEXT NOT NULL);")?;
-        Ok(Self { db })
-    }
-    pub fn items(&self, identity: &str) -> Result<Vec<Item>> {
-        let mut statement=self.db.prepare("SELECT i.id,i.category,i.key,i.value,i.note,l.entry_path FROM items i LEFT JOIN password_links l ON l.item_id=i.id WHERE i.identity=? ORDER BY i.category,i.key")?;
-        Ok(statement
-            .query_map([identity], |r| {
-                Ok(Item {
-                    id: r.get(0)?,
-                    category: r.get(1)?,
-                    key: r.get(2)?,
-                    value: r.get(3)?,
-                    note: r.get(4)?,
-                    link: r.get(5)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-    pub fn put(
-        &self,
-        identity: &str,
-        category: &str,
-        key: &str,
-        value: &str,
-        note: &str,
-    ) -> Result<()> {
-        ensure!(
-            [identity, category, key, value]
-                .iter()
-                .all(|v| !v.trim().is_empty()),
-            "身份、分类、名称和内容不能为空"
-        );
-        self.db.execute("INSERT INTO items(identity,category,key,value,note) VALUES(?,?,?,?,?) ON CONFLICT(identity,category,key) DO UPDATE SET value=excluded.value,note=excluded.note,updated_at=datetime('now')",params![identity,item_category(category, key),key,value,note])?;
-        Ok(())
-    }
-    pub fn event(&self, identity: &str, title: &str, detail: &str) -> Result<()> {
-        ensure!(
-            !identity.is_empty() && !title.trim().is_empty(),
-            "身份和事件标题不能为空"
-        );
-        self.db.execute(
-            "INSERT INTO events(identity,title,detail) VALUES(?,?,?)",
-            params![identity, title, detail],
-        )?;
-        Ok(())
-    }
-    fn owned(&self, identity: &str, id: i64) -> Result<Item> {
-        self.items(identity)?
-            .into_iter()
-            .find(|item| item.id == id)
-            .context("该记录不属于当前身份")
-    }
-    pub fn link(&self, identity: &str, id: i64, path: Option<&str>) -> Result<()> {
-        self.owned(identity, id)?;
-        if let Some(path) = path {
-            ensure!(
-                !path.trim_matches('/').is_empty() && !path.chars().any(char::is_control),
-                "密码条目路径无效"
-            );
-            self.db.execute("INSERT INTO password_links VALUES(?,?) ON CONFLICT(item_id) DO UPDATE SET entry_path=excluded.entry_path",params![id,path.trim_start_matches('/')])?;
-        } else {
-            self.db
-                .execute("DELETE FROM password_links WHERE item_id=?", [id])?;
-        }
-        Ok(())
-    }
-    pub fn note(&self, identity: &str, id: i64, text: &str) -> Result<()> {
-        let item = self.owned(identity, id)?;
-        let mut value = item.metadata();
-        let note = if value.is_object() {
-            let key = if value["type"] == "mail-account" {
-                "purpose"
-            } else {
-                "text"
-            };
-            value[key] = json!(text);
-            value.to_string()
-        } else {
-            text.into()
-        };
-        self.db.execute(
-            "UPDATE items SET note=?,updated_at=datetime('now') WHERE id=? AND identity=?",
-            params![note, id, identity],
-        )?;
-        Ok(())
-    }
-    pub fn delete_field(&self, identity: &str, id: i64, field: &str) -> Result<()> {
-        if field == "link" {
-            return self.link(identity, id, None);
-        }
-        let item = self.owned(identity, id)?;
-        ensure!(
-            fields(&item.note).iter().any(|(key, _, _)| key == field),
-            "此字段不能删除"
-        );
-        let mut value = item.metadata();
-        let note = if let Some(map) = value.as_object_mut() {
-            map.remove(field.trim_start_matches("meta:"));
-            value.to_string()
-        } else {
-            String::new()
-        };
-        self.db.execute(
-            "UPDATE items SET note=?,updated_at=datetime('now') WHERE id=? AND identity=?",
-            params![note, id, identity],
-        )?;
-        Ok(())
-    }
-    pub fn delete(&mut self, identity: &str, id: i64) -> Result<()> {
-        self.owned(identity, id)?;
-        let tx = self.db.transaction()?;
-        tx.execute("DELETE FROM password_links WHERE item_id=?", [id])?;
-        tx.execute(
-            "DELETE FROM items WHERE id=? AND identity=?",
-            params![id, identity],
-        )?;
-        tx.execute(
-            "INSERT INTO events(identity,title,detail) VALUES(?,'删除资料记录',?)",
-            params![identity, format!("资料 ID {id}")],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-    pub fn unlink_password(&self, identity: &str, title: &str) -> Result<()> {
-        self.db.execute("DELETE FROM password_links WHERE entry_path=? AND item_id IN(SELECT id FROM items WHERE identity=?)",params![title,identity])?;
-        Ok(())
-    }
-}
-
-pub fn password_states(
-    project: &Project,
-    identity: &str,
-    session: &Session,
-) -> Result<BTreeMap<String, String>> {
-    let vault = identity::vault(project, identity)?;
-    let query = |operation: &str, args: Vec<String>| -> Result<Vec<String>> {
-        let output = session.run(&vault, operation, &args, &[])?;
-        Ok(std::str::from_utf8(&output)?
-            .lines()
-            .filter(|s| !s.is_empty() && !s.ends_with('/'))
-            .map(|s| s.trim_start_matches('/').into())
-            .collect())
-    };
-    let paths = query("ls", vec!["-R".into(), "-f".into()])?;
-    let query_search = |pattern: &str| -> Result<Vec<String>> {
-        let output = session.run(&vault, "search", &[pattern.into()], &[])?;
-        Ok(std::str::from_utf8(&output)?
-            .lines()
-            .map(|s| s.trim_start_matches('/').into())
-            .collect())
-    };
-    let empty = query_search("*pw:\\A\\z")?;
-    let filled = query_search("*pw:[\\s\\S]")?;
-    Ok(paths
-        .into_iter()
-        .filter(|s| {
-            !(s.ends_with("/[empty]") || s == "[empty]") || empty.contains(s) || filled.contains(s)
-        })
-        .map(|p| {
-            let status = if empty.contains(&p) && !filled.contains(&p) {
-                "未填密码"
-            } else if filled.contains(&p) && !empty.contains(&p) {
-                "已设置"
-            } else {
-                "状态未知"
-            };
-            (p, status.into())
-        })
-        .collect())
-}
-
-pub fn write_password(
-    project: &Project,
-    identity: &str,
-    title: Option<&str>,
-    username: Option<&str>,
-    edit: bool,
-    generate: bool,
-    session: &Session,
-) -> Result<String> {
-    ui::require_terminal()?;
-    let vault = identity::vault(project, identity)?;
-    let title = if let Some(t) = title.filter(|v| !v.is_empty()) {
-        t.to_owned()
-    } else if edit {
-        select_password(project, identity, "", session)?.context("已取消")?
-    } else {
-        ui::input("条目标题: ")?
-    };
-    ensure!(
-        !title.trim().is_empty() && !title.chars().any(char::is_control),
-        "条目标题无效"
-    );
-    let user = if edit {
-        username.map(str::to_owned)
-    } else {
-        Some(match username {
-            Some(user) => user.to_owned(),
-            None => ui::input("用户名（可空）: ")?,
-        })
-    };
-    session.unlock(&vault, edit)?;
-    let mut args = vec![title.clone()];
-    if let Some(user) = user {
-        args.extend(["-u".into(), user]);
-    }
-    if generate {
-        args.extend([
-            "-g".into(),
-            "-L".into(),
-            "20".into(),
-            "-l".into(),
-            "-U".into(),
-            "-n".into(),
-            "-s".into(),
-            "--every-group".into(),
-        ]);
-        session.run(&vault, if edit { "edit" } else { "add" }, &args, &[])?;
-    } else {
-        let password = ui::secret("新条目密码: ")?;
-        args.push("-p".into());
-        session.run(
-            &vault,
-            if edit { "edit" } else { "add" },
-            &args,
-            &[&password],
-        )?;
-    }
-    println!("密码已保存。");
-    Ok(title)
-}
-
 pub fn infer_title(text: &str) -> String {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     let re = regex::Regex::new(r"([\p{Han}A-Za-z0-9_.-]+?)(?:账号|账户)?密码").unwrap();
@@ -482,261 +730,195 @@ pub fn select_password(
     Ok(ui::choose("选择密码条目", &choices)?.map(|i| paths[i].clone()))
 }
 
-pub fn delete_password(
-    project: &Project,
-    identity: &str,
-    title: &str,
-    session: &Session,
-    store: &Store,
-) -> Result<()> {
-    let vault = identity::vault(project, identity)?;
-    session.unlock(&vault, true)?;
-    let paths = || -> Result<Vec<String>> {
-        let output = session.run(&vault, "ls", &["-R".into(), "-f".into()], &[])?;
-        let mut paths = std::str::from_utf8(&output)?
-            .lines()
-            .filter(|s| !s.is_empty() && !s.ends_with('/'))
-            .map(|s| s.trim_start_matches('/').to_owned())
-            .collect::<Vec<_>>();
-        if paths
-            .iter()
-            .any(|p| p.rsplit('/').next() == Some("[empty]"))
-        {
-            let states = password_states(project, identity, session)?;
-            paths.retain(|p| p.rsplit('/').next() != Some("[empty]") || states.contains_key(p));
-        }
-        Ok(paths)
-    };
-    let before = paths()?;
-    ensure!(
-        before.iter().filter(|p| p.as_str() == title).count() == 1,
-        "未找到唯一的条目路径，请在 KeePassXC 中检查重名条目"
-    );
-    let folder = project
-        .root
-        .join("backups/password-deletions")
-        .join(identity);
-    project.contained(&folder)?;
-    private_dir(&folder)?;
-    let path = folder.join(format!(
-        "{}.kdbx",
-        chrono::Local::now().format("%Y%m%d-%H%M%S-%f")
-    ));
-    let mut backup = private_file(&path)?;
-    std::io::copy(&mut fs::File::open(&vault)?, &mut backup)?;
-    backup.sync_all()?;
-    session.run(&vault, "rm", &[title.into()], &[])?;
-    store.unlink_password(identity, title)?;
-    let after = paths()?;
-    ensure!(
-        !after.iter().any(|p| p == title),
-        "删除未完成，加密备份已保留"
-    );
-    let mut counts = HashMap::new();
-    for p in &before {
-        *counts.entry(p).or_insert(0usize) += 1;
-    }
-    let mut added = Vec::new();
-    for p in &after {
-        let n = counts.entry(p).or_default();
-        if *n > 0 {
-            *n -= 1;
-        } else {
-            added.push(p);
-        }
-    }
-    if !added.is_empty() {
-        ensure!(
-            added.len() == 1
-                && !before.contains(added[0])
-                && added[0].rsplit('/').next() == title.rsplit('/').next(),
-            "条目已移入回收站，路径有歧义；请在 KeePassXC 中继续操作，加密备份已保留"
-        );
-        session.run(&vault, "rm", &[added[0].clone()], &[])?;
-    }
-    println!(
-        "密码条目已删除；加密备份：{}",
-        path.strip_prefix(&project.root)?.display()
-    );
-    Ok(())
-}
-
 #[derive(Clone)]
 pub struct Record {
-    pub item: Option<Item>,
+    pub item: Item,
     pub title: String,
     pub status: String,
-    pub linked: usize,
 }
 impl Record {
     pub fn kind(&self) -> &str {
-        match &self.item {
-            Some(i) if i.category == "account" => "account",
-            Some(_) => "info",
-            None => "password",
-        }
+        &self.item.category
     }
     pub fn group(&self) -> String {
-        match &self.item {
-            Some(i) if i.category != "account" => {
-                format!("个人信息 / {}", category_label(&i.category))
+        format!(
+            "{} {} · {}",
+            icon(self.item.group_icon),
+            self.item.group_path(),
+            match self.kind() {
+                "info" => "基础信息",
+                "event" => "事件",
+                _ => "账号与密码",
             }
-            Some(_) => "账号".into(),
-            None => "密码".into(),
-        }
+        )
     }
-    pub fn details(&self, items: &[Item]) -> Vec<(String, String)> {
-        if let Some(i) = &self.item {
-            let mut fields = if i.category == "account" {
-                vec![("账号".into(), i.name()), ("登录名".into(), i.username())]
-            } else {
-                vec![
-                    ("名称".into(), i.key.clone()),
-                    ("内容".into(), i.value.clone()),
-                ]
-            };
-            fields.extend(
-                crate::store::fields(&i.note)
-                    .into_iter()
-                    .map(|(_, label, value)| (label, value)),
-            );
-            fields.push((
-                "关联密码".into(),
-                i.link.clone().unwrap_or_else(|| "—".into()),
-            ));
-            fields
-        } else {
-            vec![
-                ("条目".into(), self.title.clone()),
-                ("密码状态".into(), self.status.clone()),
-                (
-                    "关联资料".into(),
-                    items
-                        .iter()
-                        .filter(|i| i.link.as_deref() == Some(&self.title))
-                        .map(|i| format!("{}: {}", i.key, i.value))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                ),
-            ]
+    pub fn details(&self, _items: &[Item]) -> Vec<(String, String)> {
+        let i = &self.item;
+        let mut fields = vec![
+            ("条目".into(), i.key.clone()),
+            ("群组".into(), i.group_path().into()),
+        ];
+        if i.category == "account" {
+            fields.extend([
+                ("登录名".into(), i.value.clone()),
+                ("密码".into(), self.status.clone()),
+                ("网址".into(), i.url.clone()),
+            ]);
         }
+        if !i.note.is_empty() {
+            fields.push(("备注".into(), i.note.clone()));
+        }
+        for f in &i.fields {
+            let label = if f.category.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{} / {}", category_label(&f.category), f.name)
+            };
+            fields.push((
+                label,
+                f.value.clone().unwrap_or_else(|| "••••（受保护）".into()),
+            ));
+            if !f.note.is_empty() {
+                fields.push((format!("{} · 备注", f.name), f.note.clone()));
+            }
+        }
+        if !i.attachments.is_empty() {
+            fields.push(("附件".into(), i.attachments.join("\n")));
+        }
+        fields.push((
+            "图标".into(),
+            format!(
+                "{}  #{}{}",
+                i.glyph(),
+                i.icon,
+                if i.custom_icon {
+                    " · 自定义图标"
+                } else {
+                    ""
+                }
+            ),
+        ));
+        fields
     }
 }
 pub fn records(
     items: &[Item],
-    states: &BTreeMap<String, String>,
+    _states: &BTreeMap<String, String>,
     view: &str,
     category: &str,
 ) -> Vec<Record> {
-    let mut result = Vec::new();
-    if view == "all" || view == "account" {
-        for item in items.iter().filter(|i| i.category == "account") {
-            let status = item
-                .link
-                .as_ref()
-                .map(|p| states.get(p).map(String::as_str).unwrap_or("条目不存在"))
-                .unwrap_or("未关联");
-            result.push(Record {
-                title: item.title(),
-                item: Some(item.clone()),
-                status: status.into(),
-                linked: 0,
-            });
-        }
-    }
-    if view == "all" || view == "password" {
-        for (title, status) in states {
-            result.push(Record {
-                item: None,
-                title: title.clone(),
-                status: status.clone(),
-                linked: items
-                    .iter()
-                    .filter(|i| i.link.as_ref() == Some(title))
-                    .count(),
-            });
-        }
-    }
-    if view == "all" || view == "info" {
-        for item in items
-            .iter()
-            .filter(|i| i.category != "account" && (category.is_empty() || i.category == category))
-        {
-            result.push(Record {
-                title: item.key.clone(),
-                item: Some(item.clone()),
-                status: String::new(),
-                linked: 0,
-            });
-        }
-    }
-    result
+    let mut records = items
+        .iter()
+        .filter(|i| match view {
+            "account" => i.category == "account",
+            "password" => i.category == "account" && i.password_set,
+            "info" => i.category == "info",
+            _ => true,
+        })
+        .filter(|i| {
+            category.is_empty()
+                || i.category != "info"
+                || i.fields.iter().any(|f| f.category == category)
+        })
+        .map(|i| {
+            let mut item = i.clone();
+            if !category.is_empty() && item.category == "info" {
+                item.fields.retain(|f| f.category == category);
+            }
+            Record {
+                title: i.title(),
+                status: if i.category == "account" {
+                    if i.password_set {
+                        "已设置"
+                    } else {
+                        "未填密码"
+                    }
+                } else {
+                    ""
+                }
+                .into(),
+                item,
+            }
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|a, b| {
+        (&a.item.category, a.item.group_path(), &a.item.key).cmp(&(
+            &b.item.category,
+            b.item.group_path(),
+            &b.item.key,
+        ))
+    });
+    records
 }
 
+pub use crate::kdbx::backup;
+pub fn write_lock(project: &Project, identity: &str) -> Result<impl Sized> {
+    WriteLock::acquire(project, identity)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (tempfile::TempDir, Project, Store) {
-        let d = tempfile::tempdir().unwrap();
-        let p = Project {
-            root: d.path().canonicalize().unwrap(),
+    #[test]
+    fn native_snapshot_never_exposes_protected_or_secret_named_fields() {
+        let xml=br#"<KeePassFile><Root><Group><Entry><UUID>a</UUID><IconID>20</IconID><String><Key>Title</Key><Value>Mail</Value></String><String><Key>Password</Key><Value>synthetic-password</Value></String><String><Key>api_key</Key><Value>synthetic-key</Value></String><String><Key>recovery</Key><Value ProtectInMemory="True">synthetic-code</Value></String><String><Key>region</Key><Value>Earth</Value></String></Entry></Group></Root></KeePassFile>"#;
+        let d = Document {
+            root: kdbx::parse(xml).unwrap(),
+            fingerprint: [0; 32],
+            deletions: Vec::new(),
+            original_paths: Default::default(),
         };
-        let s = Store::open(&p).unwrap();
-        (d, p, s)
+        let i = &snapshot(&d)[0];
+        assert!(i.password_set);
+        assert_eq!(i.icon, 20);
+        assert_eq!(i.fields.iter().filter(|f| f.value.is_some()).count(), 1);
+        assert_eq!(i.fields[2].value.as_deref(), Some("Earth"));
     }
     #[test]
-    fn notes_links_and_deletes_are_scoped() {
-        let (_d, _p, mut s) = fixture();
-        s.put(
-            "alice",
-            "account",
-            "GitHub",
-            "alice",
-            "{\"source\":\"local\",\"text\":\"备注\"}",
-        )
-        .unwrap();
-        s.put("bob", "account", "GitHub", "bob", "").unwrap();
-        let a = s.items("alice").unwrap()[0].id;
-        let b = s.items("bob").unwrap()[0].id;
-        assert!(s.delete("alice", b).is_err());
-        assert!(s.link("alice", b, Some("GitHub")).is_err());
-        s.link("alice", a, Some("GitHub")).unwrap();
-        s.note("alice", a, "完整\n备注").unwrap();
-        assert_eq!(s.items("alice").unwrap()[0].metadata()["source"], "local");
-        assert!(s.delete_field("alice", a, "meta:source").is_err());
-        s.delete_field("alice", a, "meta:text").unwrap();
-        s.delete("alice", a).unwrap();
-        assert!(s.items("alice").unwrap().is_empty());
-        assert_eq!(s.items("bob").unwrap().len(), 1);
+    fn info_is_one_native_entry_with_fields_and_account_stays_native() {
+        let mut d = Document {
+            root: kdbx::parse(b"<KeePassFile><Root><Group/></Root></KeePassFile>").unwrap(),
+            fingerprint: [0; 32],
+            deletions: Vec::new(),
+            original_paths: Default::default(),
+        };
+        put_document(&mut d, "id-info", "姓名", "Synthetic", "备注").unwrap();
+        put_document(&mut d, "account", "电话号码", "1234", "").unwrap();
+        put_document(&mut d, "account", "GitHub", "user", "").unwrap();
+        put_document(&mut d, "account", "GitHub", "new-user", "").unwrap();
+        let items = snapshot(&d);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].fields.len(), 2);
+        assert_eq!(items[0].value, "new-user");
+        assert!(put_document(&mut d, "info", "api key", "secret", "").is_err());
+        assert_eq!(infer_title("查一下我的github密码"), "github密码");
+        put_document(&mut d, "account", "1Password", "public-login", "").unwrap();
+        let info = d.find_entry("基础信息").unwrap().unwrap();
+        d.entry_mut(&info)
+            .unwrap()
+            .set_field("隐藏属性", "original", true);
+        assert!(put_document(&mut d, "id-info", "隐藏属性", "replacement", "").is_err());
         assert_eq!(
-            s.db.query_row("SELECT count(*) FROM password_links", [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
+            d.entry_mut(&info).unwrap().field_value("隐藏属性"),
+            "original"
         );
     }
     #[test]
-    fn inference_and_legacy_metadata_remain_compatible() {
-        assert_eq!(infer_title("查一下我的github密码"), "github密码");
-        let i = Item {
-            id: 1,
-            category: "account".into(),
-            key: "a@example.com".into(),
-            value: "proton 国外".into(),
-            note: "{\"type\":\"mail-account\",\"provider\":\"Proton\",\"purpose\":\"完整备注\"}"
-                .into(),
-            link: None,
-        };
-        assert_eq!(i.username(), "a@example.com");
-        assert_eq!(i.name(), "Proton");
-        assert_eq!(i.remark(), "完整备注");
-    }
-    #[test]
-    fn sql_values_are_parameters_and_invalid_rows_are_rejected() {
-        let (_d, _p, s) = fixture();
-        s.put("alice", "work", "O'Reilly", "$(literal)", "note")
-            .unwrap();
-        assert_eq!(s.items("alice").unwrap()[0].key, "O'Reilly");
-        assert!(s.put("alice", "work", "x", "", "").is_err());
+    fn information_namespace_does_not_claim_another_groups_entry() {
+        let mut doc=Document{root:kdbx::parse("<KeePassFile><Root><Group><UUID>root</UUID><Group><UUID>work</UUID><Name>Work</Name><Entry><UUID>external</UUID><String><Key>Title</Key><Value>基础信息</Value></String><String><Key>UserName</Key><Value>original</Value></String></Entry></Group></Group></Root></KeePassFile>".as_bytes()).unwrap(),fingerprint:[0;32],deletions:Vec::new(),original_paths:Default::default()};
+        put_document(&mut doc, "id-info", "姓名", "Synthetic", "").unwrap();
+        let information = information_id(&doc).unwrap().unwrap();
+        assert_ne!(information, "external");
+        assert!(doc.find_path("ID/身份信息/基础信息").unwrap().is_some());
+        let outside = doc.entry_mut("external").unwrap();
+        assert_eq!(outside.field_value("UserName"), "original");
+        assert!(outside.field("姓名").is_none());
+        assert_eq!(
+            snapshot(&doc)
+                .iter()
+                .find(|i| i.id == "external")
+                .unwrap()
+                .category,
+            "account"
+        );
     }
 }

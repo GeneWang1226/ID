@@ -1,17 +1,16 @@
 use crate::{
-    Project, identity, private_dir, private_file,
-    store::{self, Item, Store},
+    Project, identity,
+    store::{self, Store},
     ui,
     vault::Session,
 };
 use anyhow::{Context, Result, ensure};
 use quick_xml::{Reader, events::Event};
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read},
     path::Path,
 };
 use zeroize::Zeroizing;
@@ -115,7 +114,9 @@ fn read_sheet(bytes: &[u8], secret_row: Option<usize>) -> Result<Vec<Row>> {
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_)
                 if text_value
                     && column < 7
-                    && (column < 5 || first || secret_row == Some(number)) =>
+                    && (column < 5
+                        || first
+                        || (secret_row == Some(number) || secret_row == Some(0))) =>
             {
                 cells[column].push_str(&crate::xml_text(&event)?.unwrap())
             }
@@ -151,7 +152,7 @@ fn read_sheet(bytes: &[u8], secret_row: Option<usize>) -> Result<Vec<Row>> {
                     public[3].len() <= 254 && email.is_match(&public[3]),
                     "邮箱地址无效"
                 );
-                let secret = if secret_row == Some(number) {
+                let secret = if secret_row == Some(number) || secret_row == Some(0) {
                     vec![
                         std::mem::replace(&mut cells[5], Zeroizing::new(String::new())),
                         std::mem::replace(&mut cells[6], Zeroizing::new(String::new())),
@@ -173,18 +174,15 @@ fn read_sheet(bytes: &[u8], secret_row: Option<usize>) -> Result<Vec<Row>> {
     Ok(rows)
 }
 
-pub fn accounts(project: &Project, source: &Path, owners: &[String]) -> Result<()> {
+pub fn accounts(
+    project: &Project,
+    source: &Path,
+    owners: &[String],
+    session: &Session,
+) -> Result<()> {
     let bytes = Zeroizing::new(fs::read(source)?);
-    let rows = read_sheet(&bytes, None)?;
-    let folder = project.root.join("backups/mail-imports");
-    project.contained(&folder)?;
-    private_dir(&folder)?;
-    let archive = folder.join(format!("{:x}.xlsx", Sha256::digest(&*bytes)));
-    if !archive.exists() {
-        let mut f = private_file(&archive)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-    }
+    let rows = read_sheet(&bytes, Some(0))?;
+    let source_hash = format!("{:x}", Sha256::digest(&*bytes));
     let mut aliases = identity::names(project)?
         .into_iter()
         .map(|n| (n.to_lowercase(), n))
@@ -196,113 +194,91 @@ pub fn accounts(project: &Project, source: &Path, owners: &[String]) -> Result<(
         identity::select(project, Some(name))?;
         aliases.insert(alias.to_lowercase(), name.into());
     }
-    let mut ready = Vec::new();
-    let mut seen = HashSet::new();
+    let mut ready = BTreeMap::<String, Vec<Row>>::new();
     let mut pending = 0;
+    let mut seen = HashSet::new();
     for row in rows {
         if let Some(owner) = aliases.get(&row.public[2].to_lowercase()) {
             ensure!(
-                seen.insert((owner.clone(), row.public[3].to_lowercase())),
-                "表格中同一身份有重复账号，请先合并"
+                seen.insert((
+                    owner.clone(),
+                    row.public[1].to_lowercase(),
+                    row.public[3].to_lowercase()
+                )),
+                "同一身份有重复账号，请先合并"
             );
-            ready.push((owner.clone(), row));
+            ready.entry(owner.clone()).or_default().push(row);
         } else {
             pending += 1;
         }
     }
     ensure!(!ready.is_empty(), "没有归属明确的账号，未写入");
-    let mut store = Store::open(project)?;
-    let backup = folder.join(format!(
-        "id-before-{}.db",
-        chrono::Local::now().format("%Y%m%d-%H%M%S-%f")
-    ));
-    private_file(&backup)?;
-    store.db.backup("main", &backup, None)?;
-    let tx = store.db.transaction()?;
-    for (owner, row) in &ready {
-        let [region, provider, original_owner, account, purpose] = &row.public;
-        let note = json!({"type":"mail-account","provider":provider,"region":region,"purpose":purpose,"password_title":format!("邮箱 - {account}"),"source":archive.strip_prefix(&project.root)?.to_string_lossy(),"source_row":row.number,"source_owner":original_owner});
-        tx.execute("INSERT INTO items(identity,category,key,value,note) VALUES(?,'account',?,?,?) ON CONFLICT(identity,category,key) DO UPDATE SET value=excluded.value,note=excluded.note,updated_at=datetime('now') WHERE items.value!=excluded.value OR items.note!=excluded.note",rusqlite::params![owner,format!("email:{}",account.to_lowercase()),account,note.to_string()])?;
+    for (owner, rows) in ready {
+        println!("导入身份 {owner}：{} 个账号", rows.len());
+        let store = Store::open(project, &owner, session)?;
+        store.update(|d| {
+            for row in &rows {
+                let [region, provider, _, account, purpose] = &row.public;
+                let marker = format!("{source_hash}:{}", row.number);
+                if d.entries()
+                    .iter()
+                    .any(|(_, e)| e.meta("ID.Import") == marker)
+                {
+                    continue;
+                }
+                let found = d
+                    .entries()
+                    .into_iter()
+                    .filter(|(_, e)| {
+                        let title = e.field_value("Title");
+                        e.field_value("UserName").eq_ignore_ascii_case(account)
+                            && ((!provider.is_empty()
+                                && (title.eq_ignore_ascii_case(provider)
+                                    || e.field_value("服务商").eq_ignore_ascii_case(provider)))
+                                || title.eq_ignore_ascii_case(account)
+                                || title.eq_ignore_ascii_case(&format!("邮箱 - {account}")))
+                    })
+                    .map(|(_, e)| e.value("UUID").to_owned())
+                    .collect::<Vec<_>>();
+                ensure!(found.len() <= 1, "存在重复服务账号，请先整理密码库");
+                let id = if let Some(id) = found.first() {
+                    id.clone()
+                } else {
+                    let base = if provider.is_empty() {
+                        account.as_str()
+                    } else {
+                        provider.as_str()
+                    };
+                    let title = if d.find_entry(base)?.is_some() {
+                        format!("{base} · {account}")
+                    } else {
+                        base.into()
+                    };
+                    ensure!(d.find_entry(&title)?.is_none(), "导入标题冲突，未覆盖");
+                    let id = d.add(&title, "account", 19)?;
+                    d.entry_mut(&id)?.set_field("UserName", account, false);
+                    id
+                };
+                let e = d.entry_mut(&id)?;
+                e.set_meta("ID.Import", &marker);
+                // Imported comments may contain password hints; keep them protected and out of AI queries.
+                e.set_field("原表备注", purpose, true);
+                e.set_field("地区", region, false);
+                e.set_field("服务商", provider, false);
+                for (name, value) in ["密码备注", "详细数据"].into_iter().zip(&row.secret) {
+                    if !value.is_empty() {
+                        e.set_field(name, value, true);
+                    }
+                }
+                e.touch();
+            }
+            Ok(())
+        })?;
     }
-    tx.commit()?;
-    println!(
-        "已导入 {} 个账号；{} 个待确认归属。密码备注保留在本机原表备份，未写入资料库。",
-        ready.len(),
-        pending
-    );
+    session.lock();
+    println!("导入完成；{pending} 个账号待确认归属。原文件保留，机密列已加密存入 KDBX。");
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
-fn attach(
-    project: &Project,
-    identity: &str,
-    item: &Item,
-    title: &str,
-    session: &Session,
-) -> Result<()> {
-    use std::os::fd::AsRawFd;
-    let meta = item.metadata();
-    if meta["type"] != "mail-account" {
-        return Ok(());
-    }
-    let source = project
-        .root
-        .join(meta["source"].as_str().context("原表来源无效")?)
-        .canonicalize()?;
-    ensure!(
-        source.starts_with(project.root.join("backups/mail-imports").canonicalize()?),
-        "原表来源超出本机备份目录"
-    );
-    let bytes = Zeroizing::new(fs::read(source)?);
-    let number = meta["source_row"].as_u64().context("原表行号无效")? as usize;
-    let rows = read_sheet(&bytes, Some(number))?;
-    let row = rows
-        .iter()
-        .find(|r| r.number == number)
-        .context("原表行已不存在")?;
-    ensure!(
-        row.public[3] == item.username()
-            && row.public[2] == meta["source_owner"].as_str().unwrap_or(""),
-        "原表账号或归属发生变化，未附加资料"
-    );
-    if row.secret.iter().all(|s| s.trim().is_empty()) {
-        return Ok(());
-    }
-    if !ui::confirm("将原表中的密码备注和详细资料保存为密码库加密附件？")?
-    {
-        return Ok(());
-    }
-    let fd = rustix::fs::memfd_create("id-account-notes", rustix::fs::MemfdFlags::CLOEXEC)?;
-    let mut file = fs::File::from(fd);
-    for (label, value) in ["密码备注", "详细数据"].into_iter().zip(&row.secret) {
-        file.write_all(label.as_bytes())?;
-        file.write_all(b":\n")?;
-        file.write_all(value.as_bytes())?;
-        file.write_all(b"\n\n")?;
-    }
-    let input = format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd());
-    session.run(
-        &identity::vault(project, identity)?,
-        "attachment-import",
-        &[title.into(), "原表补充资料.txt".into(), input],
-        &[],
-    )?;
-    println!("补充资料已保存到密码库。");
-    Ok(())
-}
-#[cfg(not(target_os = "linux"))]
-fn attach(
-    _project: &Project,
-    _identity: &str,
-    _item: &Item,
-    _title: &str,
-    _session: &Session,
-) -> Result<()> {
-    println!("此平台请在 KeePassXC 中手动附加原表补充资料。");
-    Ok(())
-}
-
 pub fn fill(
     project: &Project,
     identity: &str,
@@ -314,49 +290,44 @@ pub fn fill(
         store::write_password(project, identity, title, username, false, false, session)?;
         return Ok(());
     }
-    let store = Store::open(project)?;
+    let store = Store::open(project, identity, session)?;
     loop {
-        let accounts = store
+        let items = store
             .items(identity)?
             .into_iter()
             .filter(|i| i.category == "account")
             .collect::<Vec<_>>();
-        let mut choices = accounts
+        let mut choices = items
             .iter()
-            .map(|i| format!("{} · {}", i.name(), i.username()))
+            .map(|i| {
+                format!(
+                    "{} · {} · {}",
+                    i.key,
+                    i.value,
+                    if i.password_set {
+                        "已设置"
+                    } else {
+                        "未填密码"
+                    }
+                )
+            })
             .collect::<Vec<_>>();
-        choices.push("自定义新条目".into());
-        let Some(index) = ui::choose("选择账号录入密码", &choices)? else {
+        choices.push("新增条目".into());
+        let Some(i) = ui::choose("选择账号录入密码", &choices)? else {
             return Ok(());
         };
-        if index == accounts.len() {
+        if i == items.len() {
             store::write_password(project, identity, None, username, false, false, session)?;
-            continue;
-        }
-        let item = &accounts[index];
-        let options = vec![
-            "新增密码".into(),
-            "修改已有密码".into(),
-            "仅补录原表资料".into(),
-        ];
-        let Some(action) = ui::choose(&item.name(), &options)? else {
-            continue;
-        };
-        let title = item.title();
-        if action < 2 {
+        } else {
             store::write_password(
                 project,
                 identity,
-                Some(&title),
-                Some(&item.username()),
-                action == 1,
+                Some(&items[i].title()),
+                None,
+                items[i].password_set,
                 false,
                 session,
             )?;
-            store.link(identity, item.id, Some(&title))?;
-        }
-        if let Err(error) = attach(project, identity, item, &title, session) {
-            eprintln!("{}", ui::clean(&error.to_string()));
         }
     }
 }
@@ -364,6 +335,7 @@ pub fn fill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     fn workbook() -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         writer

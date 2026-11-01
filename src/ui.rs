@@ -121,12 +121,11 @@ impl Drop for Terminal {
     }
 }
 pub fn key(timeout: Duration) -> Result<Option<event::KeyEvent>> {
-    if event::poll(timeout)? {
-        if let Event::Key(k) = event::read()? {
-            if k.kind != KeyEventKind::Release {
-                return Ok(Some(k));
-            }
-        }
+    if event::poll(timeout)?
+        && let Event::Key(k) = event::read()?
+        && k.kind != KeyEventKind::Release
+    {
+        return Ok(Some(k));
     }
     Ok(None)
 }

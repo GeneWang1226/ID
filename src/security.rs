@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use std::{collections::HashSet, fs, path::Path, process::Command};
 
 fn forbidden(path: &str) -> bool {
-    ["identities/", "backups/", "logs/"]
+    ["identities/", "backups/", "logs/", "exports/"]
         .iter()
         .any(|p| path.starts_with(p))
         || path.ends_with(".kdbx")
@@ -58,6 +58,9 @@ pub fn check(project: &Project) -> Result<()> {
         ".git",
         "/logs",
         "/backups",
+        "/data",
+        "/exports",
+        ".id-*",
         ".turso.env",
     ] {
         ensure!(
