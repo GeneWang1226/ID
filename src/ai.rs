@@ -497,15 +497,13 @@ pub fn chat(
     };
     let mut history = Vec::new();
     let mut store = Store::open(project, identity, session)?;
-    let terminal = ui::Terminal::new(true)?;
+    let _terminal = ui::Terminal::new(true)?;
     let mut view = ChatView::new(identity);
     view.form("打开 AI 助手")?;
-    let clipboard = terminal.suspend(|| {
-        if let Ok(vault) = crate::identity::vault(project, identity) {
-            session.unlock(&vault, false)?;
-        }
-        crate::clipboard::check(project, false)
-    })?;
+    if let Ok(vault) = crate::identity::vault(project, identity) {
+        session.unlock(&vault, false)?;
+    }
+    let clipboard = crate::clipboard::check(project, false)?;
     if !matches!(clipboard.as_str(), "native" | "supported") {
         view.notice("剪贴板未验证 · make clipboard-check 可重测");
     }
@@ -529,7 +527,7 @@ pub fn chat(
         if text.trim().is_empty() {
             continue;
         }
-        terminal.suspend(|| session.unlock(&crate::identity::vault(project, identity)?, false))?;
+        session.unlock(&crate::identity::vault(project, identity)?, false)?;
         view.push(format!("你 › {text}"), "36");
         let (draft, reasoning, queried) = 'request: loop {
             view.status("AI › 正在整理…")?;
@@ -560,7 +558,7 @@ pub fn chat(
                     Some(0) => continue 'request,
                     Some(1) => {
                         view.form("AI 设置")?;
-                        if let Err(error) = terminal.suspend(|| config::settings(project)) {
+                        if let Err(error) = config::settings(project) {
                             view.push(error.to_string(), "31");
                         }
                     }
@@ -679,7 +677,7 @@ pub fn chat(
             continue;
         }
         view.form(&choices[index])?;
-        let result = terminal.suspend(|| match *action {
+        let result = (|| match *action {
             "account-add" => add_account(project, identity, title, &store, session),
             "write" => {
                 apply(&mut store, identity, &draft)?;
@@ -701,7 +699,7 @@ pub fn chat(
             "copy" => crate::clipboard::pass(project, identity, Some(title), false, session),
             "show" => crate::clipboard::pass(project, identity, Some(title), true, session),
             _ => Ok(()),
-        });
+        })();
         match result {
             Ok(()) => view.push(format!("操作完成：{}", choices[index]), "32"),
             Err(error) => view.push(error.to_string(), "31"),

@@ -68,7 +68,7 @@ settings: $(BIN) ## 方向键修改设置、API key 和全局明文权限
 clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板
 	@$(BIN) clipboard-check
 
-new: $(BIN) ## 新增或补齐身份（id=gene）
+new: $(BIN) ## 新建独立身份密码库（id=gene）
 	@$(BIN) new
 
 passwd: $(BIN) ## 修改密码库主密码（id=gene）

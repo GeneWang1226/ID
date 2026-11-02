@@ -151,6 +151,7 @@ pub fn update_secret(project: &Project, key: &str, value: &Secret) -> Result<()>
 
 pub fn settings(project: &Project) -> Result<()> {
     let mut cfg = Config::load(project)?;
+    let terminal = ui::Terminal::new(true)?;
     let mut pending = None;
     let mut selected = 0;
     loop {
@@ -221,10 +222,12 @@ pub fn settings(project: &Project) -> Result<()> {
                     update_secret(project, "AI_API_KEY", &v)?;
                 }
                 cfg.save(project)?;
+                drop(terminal);
                 println!("设置已保存。");
                 return Ok(());
             }
             _ => {
+                drop(terminal);
                 println!("已取消。");
                 return Ok(());
             }

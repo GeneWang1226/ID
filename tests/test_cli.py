@@ -45,6 +45,11 @@ class Terminal:
     def send(self, text):
         os.write(self.fd, text.encode() if isinstance(text, str) else text)
 
+    def assert_fullscreen_active(self):
+        self.case.assertEqual(self.output.count(b'\x1b[?1049h'), 1)
+        self.case.assertEqual(self.output.count(b'\x1b[?1049l'), 0)
+        self.case.assertFalse(termios.tcgetattr(self.slave)[3] & termios.ECHO)
+
     def read(self, timeout=.1):
         if select.select([self.fd], [], [], timeout)[0]:
             try:
@@ -112,7 +117,8 @@ class CliTests(unittest.TestCase):
         return result
 
     def keepass(self, name, operation, args=(), data=None, code=0):
-        vault = self.root / f"identities/{name}/passwords/{name}.kdbx"
+        vault = self.root / f"identities/{name}.kdbx"
+        if not vault.exists():vault=self.root / f"identities/{name}/passwords/{name}.kdbx"
         result = subprocess.run(["keepassxc-cli", operation, "-q", str(vault), *args],
                                 input=data or MASTER + "\n", text=True, capture_output=True,
                                 env={**self.env, "LANG": "C", "LC_ALL": "C"}, timeout=15)
@@ -177,20 +183,51 @@ class CliTests(unittest.TestCase):
         self.add()
         t = Terminal(self, ["manage", "--id", "alice", "--type", "password"])
         t.expect("主密码:")
+        t.assert_fullscreen_active()
         t.send(MASTER + "\r")
         t.expect("Enter 展开")
         t.send(ENTER + b"o")
         t.expect("设置密码")
         t.send(DOWN*3+ENTER)
         t.expect("再次验证主密码:")
+        t.assert_fullscreen_active()
         t.send(MASTER + "\r")
         t.expect("新条目密码:")
+        t.assert_fullscreen_active()
         t.send("synthetic-updated\r")
         t.expect("Enter 收起")
         t.send("q")
         output = t.finish()
+        self.assertEqual(output.count(b'\x1b[?1049h'), 1)
+        self.assertEqual(output.count(b'\x1b[?1049l'), 1)
         self.assertNotIn(b"synthetic-updated", output)
         self.assertEqual(self.keepass("alice", "show", ["-s", "-a", "Password", "GitHub"]).strip(), "synthetic-updated")
+
+    def test_password_dialog_resize_edit_clear_and_cancel_keep_tui_and_vault(self):
+        self.add()
+        vault = self.root / 'identities/alice/passwords/alice.kdbx'
+        before = vault.read_bytes()
+        t = Terminal(self, ['manage', '--id', 'alice'], width=65, height=18)
+        t.expect('主密码:');t.assert_fullscreen_active()
+        t.send('SYNTHETIC-DISCARD');t.expect('••••••••')
+        t.send(b'\x15')
+        t.send(MASTER[:8])
+        fcntl.ioctl(t.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 12, 40, 0, 0))
+        t.expect('主密码:');t.assert_fullscreen_active()
+        t.send('🙂');t.send(b'\x7f');t.send(MASTER[8:]+'\r')
+        t.expect('Enter 展开');t.send(ENTER+b'o');t.expect('设置密码');t.send(DOWN*3+ENTER)
+        t.expect('再次验证主密码:');t.assert_fullscreen_active()
+        t.send('SYNTHETIC-CANCELLED');t.send(b'\x1b');t.expect('已取消')
+        t.send(ENTER);t.expect('主密码:');t.send(MASTER+'\r')
+        t.expect('┌ 详情');t.assert_fullscreen_active();t.send('q')
+        output=t.finish()
+        for value in ['SYNTHETIC-DISCARD','SYNTHETIC-CANCELLED','🙂',PASSWORD]:
+            self.assertNotIn(value.encode(),output)
+        self.assertEqual(vault.read_bytes(),before)
+        self.assertEqual(output.count(b'\x1b[?1049h'),1)
+        self.assertEqual(output.count(b'\x1b[?1049l'),1)
+        t=Terminal(self,['manage','--id','alice'])
+        t.expect('主密码:');t.assert_fullscreen_active();t.send(b'\x03');t.finish(130)
 
     def test_plaintext_fails_closed_and_reauthenticates(self):
         self.add()
@@ -231,8 +268,9 @@ class CliTests(unittest.TestCase):
         t.expect("再次输入主密码:");t.send(MASTER + "\r")
         t.expect("基础信息已保存到 ID_info/charlie", timeout=30);output=t.finish()
         self.assertNotIn(b"synthetic-initial", output)
-        vault = self.root / "identities/charlie/passwords/charlie.kdbx"
-        self.assertFalse((vault.parent.parent/'data').exists())
+        vault = self.root / "identities/charlie.kdbx"
+        self.assertFalse((self.root/'identities/charlie').exists())
+        self.assertTrue((legacy/'obsolete').is_file())
         self.keepass('charlie','ls',data='synthetic-initial\n',code=1)
         root=ET.fromstring(self.keepass('charlie','export'))
         group=next(g for g in root.findall('./Root/Group/Group') if g.findtext('Name')=='ID_info')
@@ -261,10 +299,37 @@ class CliTests(unittest.TestCase):
             t.expect('未创建身份');output=t.finish(1)
             if second:self.assertNotIn(second.encode(),output)
             self.assertFalse((self.root/'identities/charlie').exists())
+            self.assertFalse((self.root/'identities/charlie.kdbx').exists())
         t=Terminal(self,['new'])
         t.expect('新身份名:');t.send('charlie\r');t.expect('设置主密码:');t.send(MASTER+'\r')
         t.expect('再次输入主密码:');t.send(b'\x03');t.expect('已取消');t.finish(130)
         self.assertFalse((self.root/'identities/charlie').exists())
+        self.assertFalse((self.root/'identities/charlie.kdbx').exists())
+
+    def test_flat_identity_supports_manage_edit_backup_and_legacy_coexistence(self):
+        self.add()
+        old=self.root/'identities/alice/passwords/alice.kdbx'
+        flat=self.root/'identities/alice.kdbx';original=old.read_bytes();old.rename(flat)
+        archive=self.root/'backups/legacy-identities';archive.mkdir(parents=True)
+        (self.root/'identities/alice').rename(archive/'alice')
+        self.assertEqual(flat.read_bytes(),original)
+        t=Terminal(self,['manage'])
+        t.expect('选择身份');t.expect('alice');t.expect('bob');t.send(ENTER)
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('GitHub');t.send('q');t.finish()
+        self.item(key='姓名',category='id-info',value='Synthetic')
+        self.assertEqual(len(self.entries()),2)
+        self.assertEqual(self.keepass('alice','show',['-s','-a','Password','GitHub']).rstrip('\n'),PASSWORD)
+        self.run_cli('backup')
+        self.assertTrue(list((self.root/'backups/vaults/alice').glob('*.kdbx')))
+        before=flat.read_bytes();self.run_cli('new','--id','alice');self.assertEqual(flat.read_bytes(),before)
+        self.assertFalse((self.root/'identities/alice').exists())
+        self.assertEqual(self.entries('bob'),[])
+        # Two active copies must never silently select one.
+        duplicate=self.root/'identities/alice/passwords/alice.kdbx';duplicate.parent.mkdir(parents=True)
+        duplicate.write_bytes(before)
+        t=Terminal(self,['manage','--id','alice'])
+        t.expect('新旧两个密码库');t.finish(1)
+        self.assertEqual(flat.read_bytes(),before)
 
     def test_tag_rebuild_matches_escaped_titles_preserves_password_and_attachment(self):
         self.add("A & B")
@@ -347,10 +412,13 @@ class CliTests(unittest.TestCase):
         t.expect("AI API key")
         t.send(ENTER)
         t.expect("新的 AI API key")
+        t.assert_fullscreen_active()
         t.send("synthetic-api-key\r")
         t.expect("已设置")
         t.send(b"q")
         output = t.finish()
+        self.assertEqual(output.count(b'\x1b[?1049h'),1)
+        self.assertEqual(output.count(b'\x1b[?1049l'),1)
         self.assertNotIn(b"synthetic-api-key", output)
         self.assertFalse((self.root / "config/secrets/.secrets.env").exists())
         t = Terminal(self, ["settings"])
@@ -710,6 +778,82 @@ class CliTests(unittest.TestCase):
         self.assertGreaterEqual(len(backups),4)
         self.assertTrue(all(p.stat().st_mode&0o777==0o600 for p in backups))
 
+    def test_attachment_browser_paging_navigation_and_encrypted_import(self):
+        self.add()
+        home = self.root / 'incoming'
+        documents = home / 'documents'
+        documents.mkdir(parents=True)
+        source = documents / '恢复 codes.pdf'
+        content = b'%PDF SYNTHETIC-ATTACHMENT-NOT-FOR-DISPLAY'
+        source.write_bytes(content)
+        for i in range(20):
+            (home / f'file-{i:02d}.txt').write_text('synthetic')
+        (home / '.hidden.txt').write_text('synthetic')
+        bob = (self.root / 'identities/bob/passwords/bob.kdbx').read_bytes()
+        t = Terminal(self, ['manage', '--id', 'alice'], env={'HOME': str(home)}, width=65, height=16)
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('Enter 展开');t.send(ENTER+b'o')
+        t.expect('导入附件');t.send(DOWN*6+ENTER);t.expect('浏览文件…');t.send(ENTER)
+        t.expect('p 路径');t.send(b'\x1b[6~');t.expect('file-07.txt')
+        t.send(b'\x1b[F');t.expect('file-19.txt');t.send('h');t.expect('.hidden.txt')
+        t.send('h');t.send(b'\x1b[H'+ENTER);t.expect('恢复 codes.pdf')
+        t.send(b'\x1b[D');t.expect('documents/');t.send(ENTER);t.expect('恢复 codes.pdf')
+        t.send(ENTER);t.expect('再次验证主密码:');t.assert_fullscreen_active()
+        t.send(MASTER+'\r');t.expect('Enter 收起')
+        t.send('q');output=t.finish()
+        self.assertEqual(output.count(b'\x1b[?1049h'),1)
+        self.assertEqual(output.count(b'\x1b[?1049l'),1)
+        self.assertEqual(source.read_bytes(), content)
+        self.assertEqual(self.keepass('alice','attachment-export',['--stdout','GitHub',source.name,'-']).encode(), content)
+        self.assertEqual((self.root / 'identities/bob/passwords/bob.kdbx').read_bytes(), bob)
+        self.assertNotIn(content, output)
+        self.assertNotIn(PASSWORD.encode(), output)
+        self.assertTrue(list((self.root/'backups/vaults/alice').glob('*.kdbx')))
+
+    def test_attachment_ssh_path_errors_quotes_and_multiple_completions(self):
+        self.add()
+        home = self.root / 'incoming'
+        home.mkdir()
+        for name in ['恢复 A.pdf', '恢复 B.pdf']:
+            (home/name).write_bytes(b'%PDF SYNTHETIC-' + name.encode())
+        t=Terminal(self,['manage','--id','alice'],env={'HOME':str(home),'SSH_TTY':'/dev/synthetic'})
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('Enter 展开');t.send(ENTER+b'o')
+        t.expect('导入附件');t.send(DOWN*6+ENTER);t.expect('添加附件 · 服务器文件');t.send(DOWN+ENTER)
+        t.expect('Tab 补全')
+        missing='C:/Users/test/missing.pdf'
+        t.send(missing+'\r');t.expect('服务器上找不到该文件')
+        t.send(b'\x7f'*len(missing));t.send("'~/恢复'\t");t.expect('路径补全')
+        t.send(DOWN+ENTER);t.expect('恢复 B.pdf▏');t.send(ENTER)
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('Enter 收起');t.send('q')
+        output=t.finish()
+        self.assertEqual(self.keepass('alice','attachment-export',['--stdout','GitHub','恢复 B.pdf','-']).encode(),(home/'恢复 B.pdf').read_bytes())
+        self.assertNotIn(b'%PDF SYNTHETIC-',output)
+        self.assertNotIn(PASSWORD.encode(),output)
+
+    def test_attachment_cancel_and_declined_overwrite_preserve_vault_and_source(self):
+        self.add()
+        home=self.root/'incoming';home.mkdir()
+        source=home/'recovery.pdf';source.write_bytes(b'%PDF SYNTHETIC-ORIGINAL')
+        self.keepass('alice','attachment-import',['GitHub',source.name,str(source)])
+        source.write_bytes(b'%PDF SYNTHETIC-REPLACEMENT')
+        vault=self.root/'identities/alice/passwords/alice.kdbx'
+        before=vault.read_bytes()
+        t=Terminal(self,['manage','--id','alice'],env={'HOME':str(home)})
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('Enter 展开');t.send(ENTER+b'o')
+        t.expect('导入附件');t.send(DOWN*6+ENTER);t.expect('浏览文件…');t.send(ENTER)
+        t.expect('p 路径');t.send(b'\x03');t.expect('Enter 收起')
+        self.assertEqual(vault.read_bytes(),before)
+        t.send('o');t.expect('导入附件');t.send(DOWN*6+ENTER);t.expect('浏览文件…');t.send(DOWN+ENTER)
+        t.expect('Tab 补全');t.send(b'\x1b');t.expect('p 路径');t.send('q');t.expect('Enter 收起')
+        self.assertEqual(vault.read_bytes(),before)
+        t.send('o');t.expect('导入附件');t.send(DOWN*6+ENTER);t.expect('浏览文件…');t.send(DOWN+ENTER)
+        t.expect('Tab 补全');t.send("'~/recovery.pdf'\r")
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('覆盖同名附件');t.send(ENTER)
+        t.expect('Enter 收起');t.send('q');output=t.finish()
+        self.assertEqual(output.count('再次验证主密码:'.encode()),1)
+        self.assertEqual(vault.read_bytes(),before)
+        self.assertEqual(source.read_bytes(),b'%PDF SYNTHETIC-REPLACEMENT')
+        self.assertEqual(self.keepass('alice','attachment-export',['--stdout','GitHub',source.name,'-']), '%PDF SYNTHETIC-ORIGINAL')
+
     def test_manage_icons_full_notes_and_local_protected_fields(self):
         self.item(key='姓名',category='id-info',value='Synthetic',note='字段备注\n完整内容')
         t=Terminal(self,['manage','--id','alice','--type','info'])
@@ -795,8 +939,11 @@ class CliTests(unittest.TestCase):
         t=Terminal(self,['ai','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r');t.expect('空行提交')
         t.send('存一个telegram的账号\r\r');t.expect('填写账号 telegram');t.send(ENTER)
         t.expect('登录名 / 邮箱 / 手机号:');t.send('@synthetic_login\r');t.expect('备注（可空）:');t.send('本地备注\r')
-        t.expect('账号密码');t.send(ENTER);t.expect('新条目密码:');t.send(PASSWORD+'\r');t.expect('空行提交');t.send('/quit\r\r')
+        t.expect('账号密码');t.send(ENTER);t.expect('新条目密码:');t.assert_fullscreen_active()
+        t.send(PASSWORD+'\r');t.expect('空行提交');t.send('/quit\r\r')
         output=t.finish();self.assertEqual(len(self.entries()),1)
+        self.assertEqual(output.count(b'\x1b[?1049h'),1)
+        self.assertEqual(output.count(b'\x1b[?1049l'),1)
         values=self.values(self.entries()[0]);self.assertEqual(values['UserName'],'@synthetic_login');self.assertEqual(values['Password'],PASSWORD)
         for secret in [PASSWORD,'@synthetic_login','本地备注']:self.assertNotIn(secret,json.dumps(requests,ensure_ascii=False))
         self.assertNotIn(PASSWORD.encode(),output)

@@ -1051,8 +1051,11 @@ pub(crate) struct WriteLock {
 }
 impl WriteLock {
     pub fn acquire(project: &Project, identity: &str) -> Result<Self> {
-        let vault = identity::vault(project, identity)?;
-        let path = vault.parent().unwrap().join(".id-write-lock");
+        identity::vault(project, identity)?;
+        let folder = project.root.join("config/.cache/vault-locks");
+        project.contained(&folder)?;
+        private_dir(&folder)?;
+        let path = folder.join(format!("{identity}.lock"));
         project.contained(&path)?;
         let mut options = fs::OpenOptions::new();
         options.write(true).create(true).truncate(false);

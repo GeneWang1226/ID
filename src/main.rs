@@ -37,7 +37,7 @@ enum Commands {
         #[command(flatten)]
         identity: Identity,
     },
-    /// 新建或补齐身份目录
+    /// 新建独立身份密码库
     New {
         #[command(flatten)]
         identity: Identity,
@@ -198,10 +198,12 @@ fn run() -> Result<()> {
             view,
             category,
         } => {
+            let _terminal = ui::Terminal::new(true)?;
             let id = role(&project, identity)?;
             browser::manage(&project, &id, view, category, &session)?;
         }
         Commands::PassList { identity } => {
+            let _terminal = ui::Terminal::new(true)?;
             let id = role(&project, identity)?;
             browser::manage(&project, &id, "password".into(), String::new(), &session)?;
         }
@@ -273,6 +275,7 @@ fn run() -> Result<()> {
             clipboard::check(&project, true)?;
         }
         Commands::Ai { identity, file } => {
+            let _terminal = ui::Terminal::new(true)?;
             let id = role(&project, identity)?;
             ai::chat(&project, &id, file.as_deref(), &session)?;
         }

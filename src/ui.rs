@@ -100,14 +100,6 @@ impl Terminal {
         }
         Ok(guard)
     }
-    pub fn suspend<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
-        terminal::disable_raw_mode()?;
-        execute!(io::stdout(), cursor::Show)?;
-        let result = operation();
-        terminal::enable_raw_mode()?;
-        execute!(io::stdout(), cursor::Hide)?;
-        result
-    }
 }
 impl Drop for Terminal {
     fn drop(&mut self) {
@@ -184,12 +176,7 @@ pub fn choose_from(title: &str, choices: &[String], selected: usize) -> Result<O
         }
     };
     if !terminal.alternate {
-        execute!(
-            io::stdout(),
-            cursor::MoveTo(0, 0),
-            Clear(ClearType::All),
-            cursor::Show
-        )?;
+        execute!(io::stdout(), cursor::MoveTo(0, 0), Clear(ClearType::All))?;
     }
     Ok(choice)
 }
@@ -236,19 +223,46 @@ pub fn input(prompt: &str) -> Result<String> {
 pub fn secret(prompt: &str) -> Result<Secret> {
     require_terminal()?;
     let _terminal = Terminal::new(false)?;
-    print!("{}", clean(prompt));
-    io::stdout().flush()?;
+    let fullscreen = is_fullscreen();
+    if fullscreen {
+        execute!(io::stdout(), cursor::Hide)?;
+    } else {
+        print!("{}", clean(prompt));
+        io::stdout().flush()?;
+    }
     let mut result = Secret::empty();
+    let mut size = None;
     loop {
+        if fullscreen {
+            let current = terminal::size()?;
+            if size != Some(current) {
+                let (lines, _) = secret_frame(prompt, current.0, current.1);
+                draw(&lines)?;
+                size = Some(current);
+                secret_mask(!result.is_empty(), current)?;
+            }
+        }
+        let was_empty = result.is_empty();
         if let Some(k) = key(Duration::from_millis(200))? {
             match k.code {
                 _ if cancelled(k) => {
-                    print!("\r\n");
+                    if fullscreen {
+                        draw(&[])?;
+                    } else {
+                        print!("\r\n");
+                    }
                     bail!("已取消");
                 }
                 KeyCode::Enter => {
-                    print!("\r\n");
+                    if fullscreen {
+                        draw(&[])?;
+                    } else {
+                        print!("\r\n");
+                    }
                     return Ok(result);
+                }
+                KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    result = Secret::empty();
                 }
                 KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
                     let mut encoded = Zeroizing::new([0; 4]);
@@ -258,7 +272,68 @@ pub fn secret(prompt: &str) -> Result<Secret> {
                 _ => {}
             }
         }
+        if fullscreen && was_empty != result.is_empty() {
+            secret_mask(!result.is_empty(), size.unwrap())?;
+        }
     }
+}
+
+fn secret_frame(prompt: &str, width: u16, height: u16) -> (Vec<String>, Option<(u16, u16, usize)>) {
+    if width < 24 || height < 9 {
+        return (vec![clip("请扩大终端，Esc 取消", width as usize)], None);
+    }
+    let columns = (width as usize - 4).min(60);
+    let inner = columns - 4;
+    let left = (width as usize - columns) / 2;
+    let top = (height as usize - 7) / 2;
+    let row = |text: &str| {
+        let text = clip(text, inner);
+        format!(
+            "{}│ {text}{} │",
+            " ".repeat(left),
+            " ".repeat(inner - text.width())
+        )
+    };
+    let border = |start: char, end: char| {
+        color(
+            &format!(
+                "{}{start}{}{end}",
+                " ".repeat(left),
+                "─".repeat(columns - 2)
+            ),
+            "36",
+        )
+    };
+    let mut lines = vec![color("ID  /  安全输入", "1;36")];
+    lines.resize(top, String::new());
+    lines.extend([
+        border('╭', '╮'),
+        color(&row(prompt.trim()), "1"),
+        row(""),
+        row("› "),
+        row(""),
+        color(&row("Enter 确认  Esc 取消  Ctrl+U 清空"), "2"),
+        border('╰', '╯'),
+    ]);
+    (lines, Some(((left + 2) as u16, (top + 3) as u16, inner)))
+}
+
+fn secret_mask(entered: bool, size: (u16, u16)) -> Result<()> {
+    if let (_, Some((column, row, width))) = secret_frame("", size.0, size.1) {
+        // 固定圆点不反映密码长度，真实输入始终只留在 Secret 缓冲区。
+        let text = if entered {
+            "› ••••••••"
+        } else {
+            "› "
+        };
+        execute!(io::stdout(), cursor::MoveTo(column, row))?;
+        print!(
+            "{}",
+            color(&format!("{text}{}", " ".repeat(width - text.width())), "36")
+        );
+        io::stdout().flush()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -274,5 +349,21 @@ mod tests {
                 .iter()
                 .all(|line| line.width() <= 17)
         );
+    }
+
+    #[test]
+    fn secret_dialog_fits_resized_terminals_without_secret_values() {
+        for (width, height) in [(8, 4), (24, 9), (40, 12), (100, 30)] {
+            let (lines, position) = secret_frame("主密码:\x1b[2J", width, height);
+            assert!(lines.len() <= height as usize);
+            // NO_COLOR is not needed in unit tests: stdout is a pipe.
+            assert!(lines.iter().all(|line| line.width() <= width as usize));
+            assert!(!lines.join("").contains('\x1b'));
+            if let Some((column, row, inner)) = position {
+                assert!((row as usize) < lines.len());
+                assert!(column as usize + inner < width as usize);
+                assert!(inner >= "› ••••••••".width());
+            }
+        }
     }
 }

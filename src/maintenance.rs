@@ -1,6 +1,6 @@
-use crate::{Project, identity, kdbx, private_dir, private_file, ui, valid_name, vault::Session};
+use crate::{Project, identity, kdbx, private_dir, ui, valid_name, vault::Session};
 use anyhow::{Context, Result, ensure};
-use std::{fs, io::Write, path::Path};
+use std::{fs, io::Write};
 
 pub fn new_identity(project: &Project, name: &str) -> Result<()> {
     valid_name(name)?;
@@ -11,17 +11,7 @@ pub fn new_identity(project: &Project, name: &str) -> Result<()> {
             && name.bytes().all(|c| !c.is_ascii_uppercase()),
         "新身份名须以小写字母或数字开头"
     );
-    let target = project.root.join("identities").join(name);
-    project.contained(&target)?;
-    if target.exists() {
-        ensure!(target.canonicalize()? == target, "身份路径不能使用符号链接");
-    }
-    let vault = target.join("passwords").join(format!("{name}.kdbx"));
-    project.contained(&vault)?;
-    ensure!(
-        !vault.parent().unwrap().is_symlink() && !vault.is_symlink(),
-        "密码库不能使用符号链接"
-    );
+    let vault = identity::path(project, name)?;
     let password = if !vault.exists() {
         let first = ui::secret("设置主密码: ")?;
         let second = ui::secret("再次输入主密码: ")?;
@@ -33,41 +23,17 @@ pub fn new_identity(project: &Project, name: &str) -> Result<()> {
     } else {
         None
     };
-    fn copy_missing(source: &Path, target: &Path) -> Result<()> {
-        private_dir(target)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            let path = entry.path();
-            let dest = target.join(entry.file_name());
-            ensure!(!entry.file_type()?.is_symlink(), "模板不能包含符号链接");
-            if entry.file_name() == "data" || path.extension().is_some_and(|v| v == "kdbx") {
-                continue;
-            }
-            if entry.file_type()?.is_dir() {
-                ensure!(!dest.is_symlink(), "身份目录包含符号链接");
-                copy_missing(&path, &dest)?;
-            } else if !dest.exists() {
-                let mut out = private_file(&dest)?;
-                std::io::copy(&mut fs::File::open(path)?, &mut out)?;
-            }
-        }
-        Ok(())
-    }
-    copy_missing(&project.root.join("template"), &target)?;
-    ensure!(
-        !vault.parent().unwrap().is_symlink() && !vault.is_symlink(),
-        "密码库不能使用符号链接"
-    );
-    private_dir(vault.parent().unwrap())?;
     if let Some(password) = password {
+        private_dir(vault.parent().unwrap())?;
         kdbx::create(&vault, name, &password)?;
         println!(
             "已创建身份 {name}，基础信息已保存到 ID_info/{name}。用 make manage id={name} 继续填写。"
         );
     } else {
-        println!("已补齐身份 {name} 的缺失文件；已有密码库与原主密码保留。");
+        identity::vault(project, name)?;
+        println!("身份 {name} 已存在，密码库与原主密码保留。");
     }
-    log(project, &format!("identity create-or-backfill {name}"))?;
+    log(project, &format!("identity create-or-keep {name}"))?;
     Ok(())
 }
 

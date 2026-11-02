@@ -124,6 +124,7 @@ pub fn check(project: &Project) -> Result<()> {
                 let path = entry.path();
                 ensure!(!entry.file_type()?.is_symlink(), "身份文件不能使用符号链接");
                 if path.is_dir() {
+                    permission(&path, 0o700)?;
                     identity_permissions(&path)?;
                 } else if path.extension().is_some_and(|s| s == "kdbx")
                     || path.file_name().is_some_and(|s| s == ".turso.env")
@@ -135,13 +136,8 @@ pub fn check(project: &Project) -> Result<()> {
         }
         let identities = project.root.join("identities");
         if identities.exists() {
-            for entry in fs::read_dir(identities)? {
-                let path = entry?.path();
-                if path.is_dir() {
-                    permission(&path, 0o700)?;
-                    identity_permissions(&path)?;
-                }
-            }
+            permission(&identities, 0o700)?;
+            identity_permissions(&identities)?;
         }
     }
     // 只扫描已追踪的项目文件，不输出匹配行或潜在秘密。

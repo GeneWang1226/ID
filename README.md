@@ -71,10 +71,11 @@ AI 查询仅提供当前身份的普通资料及密码是否已填，不提供�
 ## 项目目录
 
 - `src/`：Rust CLI、TUI、KeePassXC 适配。
-- `identities/<身份>/passwords/<身份>.kdbx`：唯一的日常资料存储，不进 Git。
+- `identities/<身份>.kdbx`：一身份一文件，唯一的日常资料存储，不进 Git；兼容旧的 `<身份>/passwords/<身份>.kdbx` 路径，两处同时存在时拒绝选择，避免写错库。
 - `config/config.toml`：非敏感设置；`config/secrets/.secrets.env`：本机密钥。
-- `backups/vaults/`：本机加密备份；`exports/`：用户主动导出的明文附件，两者不进 Git 或 Syncthing。
-- `template/`：用户维护的只读身份模板；新身份跳过其中的旧 `data/` 目录。
+- `backups/vaults/`：本机加密备份；`backups/legacy-identities/`：整理时保留的旧身份目录，可能包含旧明文档案，不进 Git 或 Syncthing。
+- `exports/`：用户主动导出的明文附件，不进 Git 或 Syncthing。
+- `template/`：保留的旧身份模板，程序不再复制其目录；新身份仅创建 KDBX。
 - `tests/`：只使用临时身份和合成密码库的测试。
 
 ```sh

@@ -329,6 +329,7 @@ pub fn manage(
     mut category: String,
     session: &Session,
 ) -> Result<()> {
+    let _terminal = ui::Terminal::new(true)?;
     let store = Store::open(project, identity, session)?;
     let mut browser = Browser::default();
     loop {
@@ -609,12 +610,18 @@ fn edit_field(store: &Store, item: &Item, key: Option<&str>) -> Result<()> {
 }
 fn attachment(store: &Store, item: &Item, import: bool) -> Result<()> {
     use crate::kdbx;
-    use std::path::PathBuf;
+    let source = if import {
+        let Some(path) = crate::file_picker::choose(&store.project.root)? else {
+            return Ok(());
+        };
+        Some(path)
+    } else {
+        None
+    };
     let vault = crate::identity::vault(store.project, store.identity)?;
     store.session.unlock(&vault, true)?;
     let _lock = kdbx::WriteLock::acquire(store.project, store.identity)?;
-    let (operation, args) = if import {
-        let source = PathBuf::from(ui::input("本地文件路径: ")?);
+    let (operation, args) = if let Some(source) = source {
         anyhow::ensure!(source.is_file(), "文件不存在");
         let name = source
             .file_name()

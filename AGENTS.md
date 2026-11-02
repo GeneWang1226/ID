@@ -5,8 +5,9 @@
 ## 这里是什么
 
 - `template/` — 身份模板，由用户维护。**改模板只影响新建身份**，不要动它，除非用户明确要求。
-- `identities/<name>/` — 一个具体身份。进入某个身份目录前，先读里面的 `AGENTS.md` 和 `profile.md`。
-- `src/` — Rust CLI 源码。新增身份**必须用** `make new id=<name>`，不要手工复制目录。
+- `identities/<name>.kdbx` — 一个具体身份，一身份一加密文件。兼容未整理的旧 `<name>/passwords/<name>.kdbx`；如需进入旧身份目录，先读其中的 `AGENTS.md` 和 `profile.md`。
+- `backups/legacy-identities/` — 旧身份目录的本机归档，可能含明文档案、密钥与未迁移资料；不进 Git 或 Syncthing，不擅自删除。
+- `src/` — Rust CLI 源码。新增身份**必须用** `make new id=<name>`，不要手工复制目录或模板。
 
 ## 铁律（不可违反）
 
@@ -27,7 +28,7 @@
 | --- | --- |
 | 新增身份 | 运行 `make new id=<name>`，由用户在终端设置并确认独立主密码；不再读取配置中的初始密码。自动创建原生 `ID_info/<身份名>` 基础信息条目，再用 `make manage` 补充字段。已有库不覆盖、不重置 |
 | 记录身份偏好 | 请用户通过 `make manage` 写入该身份 KDBX 的“基础信息”条目 |
-| 找某个身份的信息 | 先读该身份的 `AGENTS.md` 和 `profile.md`；KDBX 内容由用户本地解锁查询，不要由 AI 导出密码库 |
+| 找某个身份的信息 | KDBX 内容由用户本地解锁查询，不要由 AI 导出密码库；如任务涉及旧身份目录，先读其 `AGENTS.md` 和 `profile.md`，旧档案不再是日常存储 |
 | 让 AI 用密码干活 | 请用户 `make grant` 签发临时凭证，AI 只拿 token 用 `make use` 代执行；条目 Tags 分级：`ai-auto` 限时多次、无标签一次性、`ai-deny` 禁止 |
 | 存/查非机密个人信息 | 通过本地 CLI 存入当前身份 KDBX 的“基础信息”原生字段；账号为独立条目，机密字段必须受保护 |
 | 改 CLI | 修改 `src/`，运行 `make test`；测试只使用临时构造的身份和密码库 |
