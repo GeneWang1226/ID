@@ -35,6 +35,7 @@ pub struct Item {
     pub fields: Vec<Field>,
     pub attachments: Vec<String>,
     pub public_notes: bool,
+    pub email: bool,
 }
 impl Item {
     pub fn group_path(&self) -> &str {
@@ -79,6 +80,77 @@ pub const ICONS: &[(u32, &str)] = &[
     (61, "收藏"),
     (60, "家庭"),
 ];
+pub const EMAIL_FIELDS: &[(&str, bool)] = &[
+    ("服务商", false),
+    ("地区", false),
+    ("用途", false),
+    ("应急邮箱", false),
+    ("应急手机号", false),
+    ("恢复码", true),
+    ("恢复短语", true),
+    ("授权码", true),
+    ("应用密码", true),
+    ("IMAP服务器", false),
+    ("SMTP服务器", false),
+];
+pub fn email_address(value: &str) -> bool {
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '\\'))
+        && !domain.contains('@')
+}
+pub(crate) fn promote_email_fields(entry: &mut Node) -> bool {
+    let aliases = [
+        ("原表备注", "用途"),
+        ("恢复邮箱", "应急邮箱"),
+        ("recovery_email", "应急邮箱"),
+        ("恢复手机号", "应急手机号"),
+        ("recovery_phone", "应急手机号"),
+        ("recovery_codes", "恢复码"),
+        ("backup_codes", "恢复码"),
+        ("proton_recovery_phrase", "恢复短语"),
+        ("recovery_phrase", "恢复短语"),
+        ("详细数据 · proton_recovery_phrase", "恢复短语"),
+        ("详细数据 · 授权码", "授权码"),
+        ("详细数据 · 恢复码", "恢复码"),
+        ("详细数据 · 恢复短语", "恢复短语"),
+        ("详细数据 · 应急邮箱", "应急邮箱"),
+        ("详细数据 · 恢复邮箱", "应急邮箱"),
+        ("详细数据 · 应急手机号", "应急手机号"),
+        ("app_password", "应用密码"),
+        ("详细数据 · 应用密码", "应用密码"),
+    ];
+    let mut changed = false;
+    for (source, target) in aliases {
+        if entry.field_value(source).is_empty() || !entry.field_value(target).is_empty() {
+            continue;
+        }
+        let value = zeroize::Zeroizing::new(entry.field_value(source).to_owned());
+        let protected = sensitive(target)
+            || entry.field(source).is_some_and(kdbx::protected)
+            || entry.field(target).is_some_and(kdbx::protected);
+        entry.set_field(target, &value, protected);
+        changed = true;
+    }
+    for &(key, secret) in EMAIL_FIELDS {
+        if secret
+            && let Some(field) = entry.field(key)
+            && !kdbx::protected(field)
+        {
+            let value = zeroize::Zeroizing::new(field.text.to_string());
+            entry.set_field(key, &value, true);
+            changed = true;
+        }
+    }
+    changed
+}
 pub fn sensitive(name: &str) -> bool {
     let name = name.to_lowercase().replace([' ', '-', '_'], "");
     [
@@ -96,6 +168,7 @@ pub fn sensitive(name: &str) -> bool {
         "密码",
         "密钥",
         "恢复码",
+        "恢复短语",
         "助记词",
         "授权码",
         "应急码",
@@ -164,7 +237,7 @@ pub(crate) fn snapshot(doc: &Document) -> Vec<Item> {
         .map(|(path, e)| {
             let title = public(e, "Title");
             let kind = entry_kind(e, &path, &groups);
-            let fields = e
+            let mut fields = e
                 .children
                 .iter()
                 .filter(|s| s.name == "String")
@@ -183,6 +256,19 @@ pub(crate) fn snapshot(doc: &Document) -> Vec<Item> {
                     })
                 })
                 .collect::<Vec<_>>();
+            let email = e.meta("ID.AccountType") == "email"
+                || path.starts_with("ID_emails/")
+                || groups
+                    .iter()
+                    .any(|(group, kind)| kind == "email" && path.starts_with(&format!("{group}/")));
+            if email {
+                fields.sort_by_key(|field| {
+                    EMAIL_FIELDS
+                        .iter()
+                        .position(|(key, _)| *key == field.name)
+                        .unwrap_or(EMAIL_FIELDS.len())
+                });
+            }
             Item {
                 id: e.value("UUID").into(),
                 category: kind.into(),
@@ -211,6 +297,7 @@ pub(crate) fn snapshot(doc: &Document) -> Vec<Item> {
                     .map(|n| n.value("Key").to_owned())
                     .collect(),
                 public_notes: e.meta("ID.PublicNotes") == "true",
+                email,
             }
         })
         .collect::<Vec<_>>();
@@ -228,15 +315,21 @@ pub(crate) fn put_document(
         !key.trim().is_empty() && !value.trim().is_empty(),
         "名称和内容不能为空"
     );
+    let email = category == "email";
     let category = item_category(category, key);
     ensure!(
-        category == "account" || !sensitive(key),
+        matches!(category, "account" | "email") || !sensitive(key),
         "机密字段请在本地管理界面中录入"
     );
-    if category == "account" {
+    if matches!(category, "account" | "email") {
+        ensure!(!email || email_address(value), "邮箱地址无效");
         let id = match doc.find_entry(key)? {
             Some(id) => id,
-            None => doc.add(key, "account", if value.contains('@') { 19 } else { 1 })?,
+            None => doc.add(
+                key,
+                if email { "email" } else { "account" },
+                if value.contains('@') { 19 } else { 1 },
+            )?,
         };
         let entry = doc.entry_mut(&id)?;
         ensure!(
@@ -256,6 +349,9 @@ pub(crate) fn put_document(
         entry.set_field("Notes", note, false);
         entry.set_meta("ID.PublicNotes", "true");
         entry.touch();
+        if email {
+            doc.email(&id)?;
+        }
     } else {
         let id = match information_id(doc)? {
             Some(id) => id,
@@ -322,6 +418,15 @@ impl<'a> Store<'a> {
             put_document(d, "account", title, user, note)
         })
     }
+    pub fn create_email(&self, title: &str, user: &str, note: &str) -> Result<()> {
+        self.update(|d| {
+            ensure!(d.find_entry(title)?.is_none(), "已有同名条目，未覆盖");
+            put_document(d, "email", title, user, note)
+        })
+    }
+    pub fn email(&self, id: &str) -> Result<()> {
+        self.update(|d| d.email(id).map(|_| ()))
+    }
     pub fn event(&self, identity: &str, title: &str, detail: &str) -> Result<()> {
         self.scope(identity)?;
         self.batch(&[], &[(title.into(), detail.into())])
@@ -335,7 +440,7 @@ impl<'a> Store<'a> {
             return Ok(());
         }
         if !ui::confirm(&format!(
-            "整理 {count} 项项目资料；基础信息统一到 ID_info/{}，旧项目根条目归组。先留加密备份，保留 UUID、密码、附件和历史。",
+            "整理 {count} 项项目资料；基础信息统一到 ID_info/{}，邮箱归入 ID_emails，旧项目根条目归组。先留加密备份，保留 UUID、密码、附件和历史。",
             self.identity
         ))? {
             return Ok(());
@@ -748,6 +853,7 @@ impl Record {
             match self.kind() {
                 "info" => "基础信息",
                 "event" => "事件",
+                _ if self.item.email => "邮箱与密码",
                 _ => "账号与密码",
             }
         )
@@ -858,6 +964,51 @@ pub fn write_lock(project: &Project, identity: &str) -> Result<impl Sized> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn email_group_presets_preserve_secrets_and_do_not_classify_login_addresses() {
+        let mut doc = Document {
+            root: kdbx::parse(b"<KeePassFile><Root><Group/></Root></KeePassFile>").unwrap(),
+            fingerprint: [0; 32],
+            deletions: Vec::new(),
+            original_paths: Default::default(),
+        };
+        put_document(&mut doc, "account", "GitHub", "tester@example.com", "").unwrap();
+        put_document(&mut doc, "email", "Proton", "tester@example.com", "Mailbox").unwrap();
+        assert!(doc.find_path("ID/账号/GitHub").unwrap().is_some());
+        let id = doc.find_path("ID_emails/Proton").unwrap().unwrap();
+        let e = doc.entry_mut(&id).unwrap();
+        e.set_field("proton_recovery_phrase", "001234", true);
+        e.set_field("backup_codes", "old-code", true);
+        e.set_field("恢复码", "current-code", false);
+        e.set_field("恢复邮箱", "recovery@example.com", true);
+        assert!(promote_email_fields(e));
+        assert_eq!(e.field_value("恢复短语"), "001234");
+        assert_eq!(e.field_value("proton_recovery_phrase"), "001234");
+        assert_eq!(e.field_value("恢复码"), "current-code");
+        assert_eq!(e.field_value("backup_codes"), "old-code");
+        assert!(kdbx::protected(e.field("恢复码").unwrap()));
+        assert!(kdbx::protected(e.field("应急邮箱").unwrap()));
+        assert!(!promote_email_fields(e));
+        let items = snapshot(&doc);
+        assert!(!items.iter().find(|i| i.key == "GitHub").unwrap().email);
+        let mail = items.iter().find(|i| i.key == "Proton").unwrap();
+        assert!(mail.email);
+        assert!(mail.fields.iter().all(|f| f.value.is_none()));
+        assert!(put_document(&mut doc, "email", "Invalid", "not-an-email", "").is_err());
+        for address in ["x@example.com", "x+tag@example.com"] {
+            assert!(email_address(address));
+        }
+        for address in [
+            "x",
+            "@example.com",
+            "x@example",
+            "x@@example.com",
+            "x @example.com",
+            "x@.example.com",
+        ] {
+            assert!(!email_address(address));
+        }
+    }
     #[test]
     fn native_snapshot_never_exposes_protected_or_secret_named_fields() {
         let xml=br#"<KeePassFile><Root><Group><Entry><UUID>a</UUID><IconID>20</IconID><String><Key>Title</Key><Value>Mail</Value></String><String><Key>Password</Key><Value>synthetic-password</Value></String><String><Key>api_key</Key><Value>synthetic-key</Value></String><String><Key>recovery</Key><Value ProtectInMemory="True">synthetic-code</Value></String><String><Key>region</Key><Value>Earth</Value></String></Entry></Group></Root></KeePassFile>"#;

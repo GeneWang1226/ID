@@ -1168,12 +1168,100 @@ class CliTests(unittest.TestCase):
         mail=next(e for e in entries if self.values(e)['Title']=='Proton')
         self.assertEqual(self.values(mail)['UserName'],'test@example.com')
         self.assertEqual(mail.findtext('IconID'),'19')
+        self.assertEqual(self.entries_in_group('ID_emails')[0].findtext('UUID'),mail.findtext('UUID'))
         for field in ['原表备注','密码备注','详细数据']:
             node=next(s.find('Value') for s in mail.findall('String') if s.findtext('Key')==field)
             self.assertEqual(node.attrib.get('ProtectInMemory'),'True')
         self.assertEqual(self.entries('bob'),[])
         self.assertFalse((self.root/'data/id.db').exists())
         self.assertFalse((self.root/'backups/mail-imports').exists())
+
+    def test_email_organize_preserves_native_secrets_attachments_and_website_logins(self):
+        self.protected_field_fixture('SYNTHETIC-CURRENT-CODE')
+        self.keepass('alice','edit',['Proton','-u','synthetic@example.com'])
+        self.item(key='GitHub',category='account',value='tester@example.com')
+        root=ET.fromstring(self.keepass('alice','export'))
+        mail=next(e for e in root.findall('.//Entry') if self.values(e).get('Title')=='Proton')
+        original=mail.findtext('UUID')
+        data=mail.find('CustomData')
+        if data is None:data=ET.SubElement(mail,'CustomData')
+        marker=ET.SubElement(data,'Item');ET.SubElement(marker,'Key').text='ID.EmailTransfer:fixture';ET.SubElement(marker,'Value').text='done'
+        for key,value in [('proton_recovery_phrase','001234 SYNTHETIC-PHRASE'),('backup_codes','SYNTHETIC-OLD-CODE'),('详细数据 · 授权码','001122'),('原始 YAML','SYNTHETIC-ORIGINAL-YAML')]:
+            field=ET.SubElement(mail,'String');ET.SubElement(field,'Key').text=key
+            ET.SubElement(field,'Value',ProtectInMemory='True').text=value
+        # KeePassXC merges history by timestamp; give imported fixture versions distinct times.
+        modified=int.from_bytes(base64.b64decode(mail.findtext('Times/LastModificationTime')),'little')-3600
+        for offset,version in enumerate(mail.findall('History/Entry')+[mail]):
+            version.find('Times/LastModificationTime').text=base64.b64encode(struct.pack('<Q',modified+offset)).decode()
+        source=self.root/'synthetic-email.xml';ET.ElementTree(root).write(source,encoding='utf-8')
+        imported=self.root/'synthetic-email.kdbx'
+        result=subprocess.run(['keepassxc-cli','import','-q','-p',str(source),str(imported)],input=MASTER+'\n'+MASTER+'\n',text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,'Synthetic email import failed')
+        vault=self.root/'identities/alice/passwords/alice.kdbx';imported.replace(vault);vault.chmod(0o600)
+        self.keepass('alice','edit',['Proton','--notes','Synthetic existing note'])
+        attachment=self.root/'synthetic.pdf';attachment.write_bytes(b'%PDF synthetic recovery document')
+        self.keepass('alice','attachment-import',['Proton','recovery.pdf',str(attachment)])
+        before=next(e for e in self.entries() if e.findtext('UUID')==original)
+        history={json.dumps(self.values(e),sort_keys=True) for e in before.findall('History/Entry')}
+        t=Terminal(self,['organize','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r')
+        t.expect('邮箱归入 ID_emails');t.send(ENTER);t.finish()
+        unchanged=vault.read_bytes()
+        t=Terminal(self,['organize','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r')
+        t.expect('邮箱归入 ID_emails');t.send(DOWN+ENTER);t.expect('已整理',timeout=30);output=t.finish()
+        self.assertNotEqual(vault.read_bytes(),unchanged)
+        mail=self.entries_in_group('ID_emails')[0];values=self.values(mail)
+        self.assertEqual(mail.findtext('UUID'),original);self.assertEqual(values['Password'],PASSWORD)
+        self.assertEqual(values['恢复码'],'SYNTHETIC-CURRENT-CODE');self.assertEqual(values['backup_codes'],'SYNTHETIC-OLD-CODE')
+        self.assertEqual(values['恢复短语'],'001234 SYNTHETIC-PHRASE');self.assertEqual(values['proton_recovery_phrase'],values['恢复短语'])
+        self.assertEqual(values['授权码'],'001122');self.assertEqual(values['原始 YAML'],'SYNTHETIC-ORIGINAL-YAML')
+        for key in ['恢复码','恢复短语','授权码']:
+            self.assertEqual(next(s.find('Value').attrib.get('ProtectInMemory') for s in mail.findall('String') if s.findtext('Key')==key),'True')
+        self.assertTrue(history.issubset({json.dumps(self.values(e),sort_keys=True) for e in mail.findall('History/Entry')}))
+        self.assertEqual(self.keepass('alice','attachment-export',['--stdout','ID_emails/Proton','recovery.pdf','-']).encode(),attachment.read_bytes())
+        self.assertEqual(self.values(self.entries_in_group('账号')[0])['Title'],'GitHub')
+        self.assertEqual(self.entries('bob'),[])
+        unchanged=vault.read_bytes()
+        t=Terminal(self,['organize','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r');t.expect('无需整理');t.finish()
+        self.assertEqual(vault.read_bytes(),unchanged)
+        self.assertNotIn(b'SYNTHETIC-PHRASE',output)
+
+    def test_email_tui_creation_common_properties_and_manual_conversion(self):
+        t=Terminal(self,['manage','--id','alice'])
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('Enter 展开');t.send('n');t.expect('邮箱');t.send(DOWN*3+ENTER)
+        t.expect('名称:');t.send('Proton\r');t.expect('邮箱地址:');t.send('synthetic@example.com\r');t.expect('备注:');t.send('Mailbox\r')
+        t.expect('ID_emails');t.send(ENTER+'o'.encode());t.expect('邮箱常用属性');t.send(DOWN*11+ENTER)
+        t.expect('邮箱常用属性');t.send(DOWN*6+ENTER);t.expect('再次验证主密码:');t.send(MASTER+'\r')
+        t.expect('字段内容:');t.send('SYNTHETIC-EMAIL-PHRASE\r');t.expect('字段备注:');t.send('Emergency use\r')
+        t.expect('Enter 收起');t.send('q');output=t.finish()
+        self.assertNotIn(b'SYNTHETIC-EMAIL-PHRASE',output)
+        mail=self.entries_in_group('ID_emails')[0];self.assertEqual(self.values(mail)['恢复短语'],'SYNTHETIC-EMAIL-PHRASE')
+        self.assertEqual(self.values(mail)['Password'],'');self.assertEqual(mail.findtext('IconID'),'19')
+        root=ET.fromstring(self.keepass('alice','export'))
+        self.assertFalse(any(g.findtext('Name')=='ID' for g in root.findall('./Root/Group/Group')))
+        self.item(key='Old mail',category='account',value='another@example.com')
+        t=Terminal(self,['manage','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r');t.expect('Enter 展开')
+        t.send(ENTER+'o'.encode());t.expect('归为邮箱');t.send(DOWN*11+ENTER)
+        t.expect('归为邮箱并移入');t.send(DOWN+ENTER);t.expect('Enter 收起');t.send('q');t.finish()
+        self.assertEqual(len(self.entries_in_group('ID_emails')),2)
+
+    def test_email_group_rename_is_reused_and_namespace_collision_does_not_write(self):
+        self.item(key='Proton',category='email',value='one@example.com')
+        root=ET.fromstring(self.keepass('alice','export'))
+        group=next(g for g in root.findall('.//Group') if g.findtext('Name')=='ID_emails')
+        original=group.findtext('UUID');group.find('Name').text='My Mail'
+        source=self.root/'synthetic-rename.xml';ET.ElementTree(root).write(source,encoding='utf-8')
+        imported=self.root/'synthetic-rename.kdbx'
+        result=subprocess.run(['keepassxc-cli','import','-q','-p',str(source),str(imported)],input=MASTER+'\n'+MASTER+'\n',text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,'Synthetic email group rename failed')
+        vault=self.root/'identities/alice/passwords/alice.kdbx';imported.replace(vault);vault.chmod(0o600)
+        self.item(key='Gmail',category='email',value='two@example.com')
+        self.assertEqual(len(self.entries_in_group('My Mail')),2)
+        root=ET.fromstring(self.keepass('alice','export'))
+        self.assertEqual(next(g for g in root.findall('.//Group') if g.findtext('Name')=='My Mail').findtext('UUID'),original)
+        self.keepass('alice','mkdir',['ID_emails']);before=vault.read_bytes()
+        t=Terminal(self,['item','--id','alice','--cat','email','--key','New','--value','new@example.com','--note',''])
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('目标群组 ID_emails 已存在');t.finish(1)
+        self.assertEqual(vault.read_bytes(),before)
 
     def test_delete_field_preserves_other_native_fields(self):
         self.item(key='姓名',category='id-info',value='Synthetic')

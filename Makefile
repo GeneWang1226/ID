@@ -97,7 +97,7 @@ status: $(BIN) ## 查看所有身份密码库状态
 backup: $(BIN) ## 备份各身份加密密码库到 backups/vaults/
 	@$(BIN) backup
 
-organize: $(BIN) ## 基础信息整理为 ID_info/身份名，旧项目根条目归组（id=gene）
+organize: $(BIN) ## 整理 ID_info/身份名、ID_emails 与旧项目根条目（id=gene）
 	@$(BIN) organize
 
 clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板
@@ -105,7 +105,7 @@ clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板
 
 ##@ 自动化与授权
 
-item: $(BIN) ## 写入普通资料；cat=维度 key=名称 value=内容 note=备注
+item: $(BIN) ## 写入普通资料；cat=维度/account/email key=名称 value=内容 note=备注
 	@$(BIN) item
 
 event: $(BIN) ## 记录事件；title=标题 detail=详情

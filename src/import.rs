@@ -255,7 +255,7 @@ pub fn accounts(
                         base.into()
                     };
                     ensure!(d.find_entry(&title)?.is_none(), "导入标题冲突，未覆盖");
-                    let id = d.add(&title, "account", 19)?;
+                    let id = d.add(&title, "email", 19)?;
                     d.entry_mut(&id)?.set_field("UserName", account, false);
                     id
                 };
@@ -271,6 +271,7 @@ pub fn accounts(
                     }
                 }
                 e.touch();
+                d.email(&id)?;
             }
             Ok(())
         })?;

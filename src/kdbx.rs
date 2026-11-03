@@ -518,7 +518,98 @@ impl Document {
             entry.touch();
             changed = true;
         }
-        Ok(self.organize_root_entries()? + usize::from(changed))
+        let mut count = self.organize_root_entries()? + usize::from(changed);
+        let email_groups = self
+            .groups()
+            .into_iter()
+            .filter(|(path, g)| g.meta("ID.Group") == "email" || path == "ID_emails")
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>();
+        let emails = self
+            .entries()
+            .into_iter()
+            .filter(|(path, e)| {
+                let imported = !e.meta("ID.Import").is_empty()
+                    || e.child("CustomData").is_some_and(|d| {
+                        d.children
+                            .iter()
+                            .any(|n| n.value("Key").starts_with("ID.EmailTransfer:"))
+                    });
+                let provider = e.meta("ID.Kind") == "account"
+                    && matches!(
+                        e.field_value("服务商").to_ascii_lowercase().as_str(),
+                        "163"
+                            | "126"
+                            | "qq"
+                            | "outlook"
+                            | "hotmail"
+                            | "gmail"
+                            | "proton"
+                            | "icloud"
+                            | "yahoo"
+                    );
+                !matches!(e.meta("ID.Kind"), "info" | "event")
+                    && (e.meta("ID.AccountType") == "email"
+                        || email_groups
+                            .iter()
+                            .any(|group| path.starts_with(&format!("{group}/")))
+                        || (crate::store::email_address(e.field_value("UserName"))
+                            && (imported || provider)))
+            })
+            .map(|(_, e)| e.value("UUID").to_owned())
+            .collect::<Vec<_>>();
+        for id in emails {
+            count += usize::from(self.email(&id)?);
+        }
+        Ok(count)
+    }
+    pub fn email(&mut self, id: &str) -> Result<bool> {
+        let entry = self.entry_mut(id)?;
+        ensure!(
+            !matches!(entry.meta("ID.Kind"), "info" | "event"),
+            "基础信息或事件不能改为邮箱"
+        );
+        ensure!(
+            crate::store::email_address(entry.field_value("UserName")),
+            "请先填写有效邮箱地址"
+        );
+        let mut changed =
+            entry.meta("ID.AccountType") != "email" || entry.meta("ID.Kind") != "account";
+        entry.set_meta("ID.AccountType", "email");
+        entry.set_meta("ID.Kind", "account");
+        changed |= crate::store::promote_email_fields(entry);
+        let marked_group = self
+            .groups()
+            .iter()
+            .any(|(_, g)| g.meta("ID.Group") == "email");
+        let group = self.managed_group("email")?;
+        changed |= !marked_group;
+        let parent = self
+            .groups()
+            .into_iter()
+            .find(|(_, g)| g.value("UUID") == group)
+            .context("邮箱群组不存在")?
+            .0;
+        let (current, title) = self
+            .entries()
+            .into_iter()
+            .find(|(_, e)| e.value("UUID") == id)
+            .map(|(path, e)| (path, e.field_value("Title").to_owned()))
+            .context("邮箱条目不存在")?;
+        // Keep user subgroups in the email group; explicit conversion only moves other entries.
+        if !current.starts_with(&format!("{parent}/")) {
+            ensure!(
+                self.find_path(&format!("{parent}/{title}"))?.is_none(),
+                "目标邮箱群组已有同名条目，原库保留"
+            );
+            let mut entry = self.take("Entry", id)?;
+            entry.relocate()?;
+            self.group_mut(&group)?.children.push(entry);
+            changed = true;
+        } else if changed {
+            self.entry_mut(id)?.touch();
+        }
+        Ok(changed)
     }
     pub fn groups(&self) -> Vec<(String, &Node)> {
         fn collect<'a>(
@@ -593,6 +684,14 @@ impl Document {
             "项目分组标记重复，请先在 KeePassXC 中整理"
         );
         if let Some(id) = found.first() {
+            ensure!(
+                role != "email"
+                    || self
+                        .groups()
+                        .iter()
+                        .all(|(path, g)| path != "ID_emails" || g.value("UUID") == id),
+                "目标群组 ID_emails 已存在，请先核对邮箱群组"
+            );
             return Ok(id.clone());
         }
         let (name, icon) = match role {
@@ -600,9 +699,10 @@ impl Document {
             "info" => ("身份信息", 9),
             "account" => ("账号", 48),
             "event" => ("事件", 22),
+            "email" => ("ID_emails", 19),
             _ => anyhow::bail!("不支持的条目类型"),
         };
-        let parent = if role == "root" {
+        let parent = if matches!(role, "root" | "email") {
             let root = self
                 .root
                 .child_mut("Root")
@@ -632,6 +732,14 @@ impl Document {
         };
         let group = &mut parent.children[index];
         ensure!(group.meta("ID.Group").is_empty(), "分组已用于其他项目类型");
+        ensure!(
+            role != "email"
+                || !group
+                    .children
+                    .iter()
+                    .any(|e| e.name == "Entry" && matches!(e.meta("ID.Kind"), "info" | "event")),
+            "ID_emails 含其他类型条目，请先核对群组"
+        );
         group.set_meta("ID.Group", role);
         group.touch();
         Ok(group.value("UUID").to_owned())
@@ -746,7 +854,10 @@ impl Document {
         entry.set("IconID", &icon.to_string());
         entry.set_field("Title", title, false);
         entry.set_field("Password", "", true);
-        entry.set_meta("ID.Kind", kind);
+        entry.set_meta("ID.Kind", if kind == "email" { "account" } else { kind });
+        if kind == "email" {
+            entry.set_meta("ID.AccountType", "email");
+        }
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut times = Node::new("Times");
         for key in [

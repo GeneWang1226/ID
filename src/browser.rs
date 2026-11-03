@@ -375,7 +375,7 @@ pub fn manage(
                 Action::Record(index, mut key) => {
                     let item = &records[index].item;
                     if key == 'o' {
-                        let choices = [
+                        let mut choices = vec![
                             "编辑备注",
                             "编辑字段",
                             "添加字段",
@@ -388,6 +388,13 @@ pub fn manage(
                             "删除整条",
                             "取用字段",
                         ];
+                        if item.category == "account" {
+                            choices.push(if item.email {
+                                "邮箱常用属性"
+                            } else {
+                                "归为邮箱"
+                            });
+                        }
                         let Some(i) = ui::choose(
                             &item.key,
                             &choices.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -395,7 +402,7 @@ pub fn manage(
                         else {
                             return Ok(());
                         };
-                        key = ['e', 'v', 'a', 'p', 'P', 'i', 't', 's', 'f', 'x', 'c'][i];
+                        key = ['e', 'v', 'a', 'p', 'P', 'i', 't', 's', 'f', 'x', 'c', 'm'][i];
                     }
                     match key {
                         'e' => {
@@ -448,6 +455,24 @@ pub fn manage(
                             session,
                         )?,
                         'c' => use_field(&store, item)?,
+                        'm' if item.email => {
+                            let choices = store::EMAIL_FIELDS
+                                .iter()
+                                .map(|(name, secret)| {
+                                    format!("{name}{}", if *secret { " · 受保护" } else { "" })
+                                })
+                                .collect::<Vec<_>>();
+                            if let Some(i) = ui::choose("邮箱常用属性", &choices)? {
+                                edit_field(&store, item, Some(store::EMAIL_FIELDS[i].0))?;
+                            }
+                        }
+                        'm' if item.category == "account"
+                            && ui::confirm(
+                                "归为邮箱并移入 ID_emails？保留已有密码、字段与附件。",
+                            )? =>
+                        {
+                            store.email(&item.id)?
+                        }
                         'i' => {
                             let labels = store::ICONS
                                 .iter()
@@ -534,7 +559,12 @@ fn use_field(store: &Store, item: &Item) -> Result<()> {
 fn new_record(store: &Store) -> Result<()> {
     let Some(kind) = ui::choose(
         "新增",
-        &["账号".into(), "基础信息字段".into(), "事件".into()],
+        &[
+            "账号".into(),
+            "基础信息字段".into(),
+            "事件".into(),
+            "邮箱".into(),
+        ],
     )?
     else {
         return Ok(());
@@ -550,7 +580,9 @@ fn new_record(store: &Store) -> Result<()> {
     if kind == 1 && store::sensitive(&name) {
         anyhow::bail!("机密请在条目内选择添加字段，使用受保护输入");
     }
-    let value = ui::input(if kind == 0 {
+    let value = ui::input(if kind == 3 {
+        "邮箱地址: "
+    } else if kind == 0 {
         "登录名 / 邮箱 / 手机号: "
     } else {
         "内容: "
@@ -558,6 +590,7 @@ fn new_record(store: &Store) -> Result<()> {
     let note = ui::input("备注: ")?;
     match kind {
         0 => store.create_account(&name, &value, &note)?,
+        3 => store.create_email(&name, &value, &note)?,
         1 => {
             let cat = ui::input("维度（例如 id-info / contact / work）: ")?;
             store.put(
