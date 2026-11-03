@@ -5,6 +5,15 @@ BIN := target/debug/id
 
 export ID_ENTRY_ID = $(value id)
 export ID_ENTRY_TITLE = $(value title)
+ifneq ($(origin field),undefined)
+export ID_ENTRY_FIELD = $(value field)
+endif
+ifneq ($(origin show),undefined)
+export ID_PASS_SHOW = $(value show)
+endif
+ifneq ($(origin generate),undefined)
+export ID_PASS_GENERATE = $(value generate)
+endif
 ifneq ($(origin user),undefined)
 export ID_ENTRY_USER = $(value user)
 endif
@@ -41,64 +50,69 @@ endif
 ifneq ($(origin detail),undefined)
 export ID_EVENT_DETAIL = $(value detail)
 endif
-manage list: export ID_LIST_TYPE = $(if $(value type),$(value type),all)
-manage list: export ID_LIST_CATEGORY = $(value cat)
+manage: export ID_LIST_TYPE = $(if $(value type),$(value type),all)
+manage: export ID_LIST_CATEGORY = $(value cat)
 
-.PHONY: help build test check settings clipboard-check new passwd pass pass-show manage list pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag show item event ai status backup organize
+.PHONY: help build test check settings clipboard-check new remove passwd pass pass-set manage grant use grants revoke tag item event ai status backup organize
 
-help: ## 显示帮助
-	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  make %-17s %s\n", $$1, $$2}' Makefile
+help:
+	@awk 'BEGIN {FS = ":.*## "; print "使用：make <命令> [id=身份]"} /^##@ / {printf "\n%s\n", substr($$0, 5)} /^[a-z-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' Makefile
 
 $(BIN): Cargo.toml Cargo.lock $(wildcard src/*.rs)
 	@$(CARGO) build --locked
 
-build: $(BIN) ## 编译 Rust CLI（源码在 src/）
+##@ 日常使用
 
-test: ## 运行 Rust 单元测试和终端集成测试
-	@$(CARGO) test --locked
-	@$(CARGO) build --locked
-	@python3 -m unittest discover -s tests -v
+manage: $(BIN) ## 管理账号、密码、资料与附件；type=all/account/password/info，cat=维度
+	@$(BIN) manage
 
-check: $(BIN) ## 检查追踪范围、忽略规则、权限和疑似明文机密
-	@$(BIN) check
+ai: $(BIN) ## 全屏 AI 助手；file=非机密资料文件
+	@$(BIN) ai
+
+pass: $(BIN) ## 复制密码或 field=字段名；title=条目，show=1 明文查看（须设置允许）
+	@$(BIN) pass
+
+pass-set: $(BIN) ## 录入或修改密码；title=条目，generate=1 生成强密码
+	@$(BIN) pass-set
 
 settings: $(BIN) ## 方向键修改设置、API key 和全局明文权限
 	@$(BIN) settings
 
-clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板
-	@$(BIN) clipboard-check
+##@ 身份管理
 
 new: $(BIN) ## 新建独立身份密码库（id=gene）
 	@$(BIN) new
 
+remove: $(BIN) ## 移除指定身份；确认、验证后归档原文件，不直接销毁
+	@$(BIN) remove
+
 passwd: $(BIN) ## 修改密码库主密码（id=gene）
 	@$(BIN) passwd
 
-pass: $(BIN) ## 复制密码（id/title 可选，缺省选择）
-	@$(BIN) pass
+status: $(BIN) ## 查看所有身份密码库状态
+	@$(BIN) status
 
-pass-show: $(BIN) ## 明文显示密码，须全局允许并重新验证
-	@$(BIN) pass-show
+##@ 维护
 
-manage: $(BIN) ## 身份管理：账号、密码和个人信息（type=all/account/password/info，cat=维度）
-	@$(BIN) manage
-
-list: manage
+backup: $(BIN) ## 备份各身份加密密码库到 backups/vaults/
+	@$(BIN) backup
 
 organize: $(BIN) ## 基础信息整理为 ID_info/身份名，旧项目根条目归组（id=gene）
 	@$(BIN) organize
 
-pass-list: $(BIN) ## 只查看密码条目
-	@$(BIN) pass-list
+clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板
+	@$(BIN) clipboard-check
 
-pass-edit: $(BIN) ## 修改已有密码（id/title 可选）
-	@$(BIN) pass-edit
+##@ 自动化与授权
 
-pass-add: $(BIN) ## 新增条目并生成强密码（id/title/user 可选）
-	@$(BIN) pass-add
+item: $(BIN) ## 写入普通资料；cat=维度 key=名称 value=内容 note=备注
+	@$(BIN) item
 
-pass-add-manual: $(BIN) ## 选择账号或自定义条目，手动录入密码
-	@$(BIN) pass-add-manual
+event: $(BIN) ## 记录事件；title=标题 detail=详情
+	@$(BIN) event
+
+tag: $(BIN) ## 修改条目标签；title=条目 tags=ai-deny（tags= 清空）
+	@$(BIN) tag
 
 grant: $(BIN) ## 签发临时凭证（id/title 可选，ttl=秒）
 	@$(BIN) grant
@@ -112,23 +126,14 @@ grants: $(BIN) ## 列出活跃临时凭证
 revoke: $(BIN) ## 撤销凭证（token=... 或 all=1）
 	@$(BIN) revoke $(if $(filter 1,$(all)),--all,)
 
-tag: $(BIN) ## 修改标签（id/title 可选，tags=ai-deny；tags= 清空）
-	@$(BIN) tag
+##@ 开发
 
-show: $(BIN) ## 打印身份资料和事件（id 可选）
-	@$(BIN) show
+build: $(BIN) ## 编译 Rust CLI
 
-item: $(BIN) ## 写入或修改资料（id/cat/key/value/note 可选）
-	@$(BIN) item
+test: ## 运行单元测试和终端集成测试
+	@$(CARGO) test --locked
+	@$(CARGO) build --locked
+	@python3 -m unittest discover -s tests -v
 
-event: $(BIN) ## 记录事件（id/title/detail 可选）
-	@$(BIN) event
-
-ai: $(BIN) ## 全屏 AI 助手：整理资料、录入账号和本地密码操作（id/file 可选）
-	@$(BIN) ai
-
-status: $(BIN) ## 查看身份密码库状态
-	@$(BIN) status
-
-backup: $(BIN) ## 备份各身份 KDBX 到 backups/vaults/
-	@$(BIN) backup
+check: $(BIN) ## 检查追踪范围、忽略规则、权限和疑似机密
+	@$(BIN) check

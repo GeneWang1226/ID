@@ -48,17 +48,21 @@ ID
 ## 常用入口
 
 ```sh
-make manage                     # 全部资料，list 是兼容别名
+make manage                     # 全部资料
 make manage id=example type=info # 基础信息
 make pass id=example             # 选择条目、复制密码
-make pass-add-manual id=example  # 在本地录入密码
+make pass id=example title=Proton field='恢复短语' # 复制自定义字段
+make pass-set id=example         # 在本地录入或修改密码
 make ai id=example               # 全屏 AI 助手
 make organize id=example         # 旧项目条目归入原生群组
 make backup                     # 备份各身份加密密码库
+make remove id=example          # 确认、验证后移除，原文件保留在本机归档
 make help
 ```
 
-TUI 中 Enter 展开详情，`o` 操作，`n` 新增，`l` 锁定；方向键选择、翻页。普通资料只解锁一次会话；修改密码、删除内容、导出附件和明文查看等操作需再次验证主密码。空闲五分钟清除缓存主密码，退出即锁定。
+TUI 中 Enter 展开详情，`c` 取用字段，`o` 操作，`n` 新增，`l` 锁定；方向键选择、翻页。字段可复制或临时查看，多行内容支持滚动，返回后隐藏。普通资料只解锁一次会话；取用自定义字段、修改密码、删除内容、导出附件和明文查看等操作需再次验证主密码。空闲五分钟清除缓存主密码，退出即锁定。
+
+`make help` 按日常使用、身份管理、维护、自动化与授权、开发分组。密码录入统一用 `pass-set`，加 `generate=1` 生成强密码；`pass` 默认复制，加 `show=1` 明文查看（须设置允许）。重复的列表和密码命令已移除，替代关系见 [使用说明](docs/GUIDE.md#命令整理)。
 
 AI 查询仅提供当前身份的普通资料及密码是否已填，不提供密码和受保护字段；本地密码操作不经过模型。AI 外部服务按需配置 API key，正常资料管理无需网络。不要把密码、主密码或恢复码输入聊天。
 
@@ -73,7 +77,7 @@ AI 查询仅提供当前身份的普通资料及密码是否已填，不提供�
 - `src/`：Rust CLI、TUI、KeePassXC 适配。
 - `identities/<身份>.kdbx`：一身份一文件，唯一的日常资料存储，不进 Git；兼容旧的 `<身份>/passwords/<身份>.kdbx` 路径，两处同时存在时拒绝选择，避免写错库。
 - `config/config.toml`：非敏感设置；`config/secrets/.secrets.env`：本机密钥。
-- `backups/vaults/`：本机加密备份；`backups/legacy-identities/`：整理时保留的旧身份目录，可能包含旧明文档案，不进 Git 或 Syncthing。
+- `backups/vaults/`：本机加密备份；`backups/legacy-identities/`：整理时保留的旧身份目录；`backups/removed-identities/`：主动移除的身份原文件。旧目录归档可能包含明文档案，都不进 Git 或 Syncthing。
 - `exports/`：用户主动导出的明文附件，不进 Git 或 Syncthing。
 - `template/`：保留的旧身份模板，程序不再复制其目录；新身份仅创建 KDBX。
 - `tests/`：只使用临时身份和合成密码库的测试。

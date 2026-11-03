@@ -40,13 +40,19 @@ fn valid_token(token: &str) -> Result<()> {
     );
     Ok(())
 }
+#[cfg(unix)]
+fn runtime_path() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()))
+        })
+}
 fn directory() -> Result<PathBuf> {
     #[cfg(unix)]
     {
         let uid = rustix::process::getuid().as_raw();
-        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{uid}")));
+        let runtime = runtime_path();
         ensure!(
             runtime.is_dir() && !runtime.is_symlink(),
             "需要当前用户的 XDG_RUNTIME_DIR 运行目录"
@@ -135,6 +141,7 @@ pub fn grant(
     let folder = directory()?;
     cleanup_expired(&folder)?;
     let vault = identity::vault(project, identity)?;
+    let _lock = crate::kdbx::WriteLock::acquire(project, identity)?;
     let title =
         crate::store::resolve_path(project, identity, title, session)?.context("条目不存在")?;
     let tags = session.run(
@@ -239,6 +246,24 @@ pub fn revoke(project: &Project, token: Option<&str>, all: bool) -> Result<()> {
     }
     maintenance::log(project, "grant revoked")?;
     println!("凭证已撤销。");
+    Ok(())
+}
+
+pub(crate) fn revoke_identity(identity: &str) -> Result<()> {
+    #[cfg(unix)]
+    if !runtime_path().join("id-grants").try_exists()? {
+        return Ok(());
+    }
+    let folder = directory()?;
+    for entry in fs::read_dir(&folder)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|s| s == "meta") {
+            let token = path.file_stem().unwrap().to_string_lossy();
+            if valid_token(&token).is_ok() && read_meta(&path)?.identity == identity {
+                remove(&folder, &token)?;
+            }
+        }
+    }
     Ok(())
 }
 

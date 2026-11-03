@@ -636,8 +636,7 @@ pub fn chat(
             };
             let target = match action {
                 "copy" => "pass",
-                "edit" => "pass-edit",
-                _ => "pass-add-manual",
+                _ => "pass-set",
             };
             view.push(
                 format!(
@@ -696,8 +695,12 @@ pub fn chat(
                 )?;
                 Ok(())
             }
-            "copy" => crate::clipboard::pass(project, identity, Some(title), false, session),
-            "show" => crate::clipboard::pass(project, identity, Some(title), true, session),
+            "copy" => {
+                crate::clipboard::pass(project, identity, Some(title), "Password", false, session)
+            }
+            "show" => {
+                crate::clipboard::pass(project, identity, Some(title), "Password", true, session)
+            }
             _ => Ok(()),
         })();
         match result {

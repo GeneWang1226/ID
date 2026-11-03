@@ -10,6 +10,8 @@
 
 身份保存在 `identities/example.kdbx`，不再需要 `passwords`、`notes`、`documents` 等子目录。程序兼容未整理的旧路径；新旧两处同时有库时会提示冲突，需核对后归档旧目录。旧资料归档在 `backups/legacy-identities/`，不代表其中的内容已全部导入 KDBX。
 
+移除身份用 `make remove id=example`，省略 `id` 可先选择。默认取消；确认后需重新验证主密码。成功后原文件完整移到本机 `backups/removed-identities/`，身份不再出现在列表中，临时凭证撤销；旧布局会连同旧档案、密钥等整个目录归档。取消、密码错误或其他 ID 写入占用时不移动文件。不会清理既有备份或导出文件。恢复与同步注意事项见维护文档。
+
 ## TUI
 
 | 按键 | 操作 |
@@ -42,7 +44,7 @@
 
 这些都是普通 KeePass 群组，名称可自定；当前账号与事件默认仍使用已有的 `ID/账号`、`ID/事件`。普通字段、受保护属性、附件都属于条目，群组只是分类，不提供额外的访问隔离。相关数据能力见 [KeePassXC 用户指南](https://keepassxc.org/docs/KeePassXC_UserGuide#_advanced_entry_handling)。
 
-个人信息保存在“基础信息”的自定义字段。Enter 展开后能看到完整值、维度与备注；“编辑字段”修改已有值，“添加字段”增加属性。恢复码、密钥等选择“受保护内容”，输入不回显，详情中只显示掩码。需要查看这类受保护自定义字段时使用 KeePassXC；本版 TUI 不提供它们的明文查看或复制入口。
+个人信息保存在“基础信息”的自定义字段。Enter 展开后能看到完整值、维度与备注；“编辑字段”修改已有值，“添加字段”增加属性。恢复码、密钥等选择“受保护内容”，详情中只显示掩码。展开条目后按 `c`，或在 `o` 菜单选择“取用字段”，方向键选字段，再选择“复制字段”或“临时查看”。两种取用都重新验证主密码；临时查看还需设置允许明文。查看支持多行、↑↓ / PgUp / PgDn 滚动，Enter / Esc 隐藏并返回；设置撤销明文权限后会立即隐藏。受保护字段的内容不进入普通列表、操作日志或 AI 对话。
 
 图标选择与 KeePass 标准编号对应；其他客户端改变标准图标后刷新即可显示。自定义图片原样保留，在 TUI 中以原生备用图标和“自定义图标”说明表示。
 
@@ -50,13 +52,17 @@
 
 ```sh
 make pass id=example title=GitHub
-make pass-add-manual id=example title=GitHub
-make pass-edit id=example title=GitHub
-make pass-add id=example title=GitHub
+make pass id=example title=GitHub show=1
+make pass id=example title=Proton field='恢复短语'
+make pass id=example title=Proton field='恢复短语' show=1
+make pass-set id=example title=GitHub
+make pass-set id=example title=GitHub generate=1
 make clipboard-check
 ```
 
-录入密码时，已有空密码账号直接补填，不新增重复条目；替换已有密码会重新验证。`pass-add` 在本地生成 32 位随机密码。
+`pass-set` 同时支持新增和修改：已有账号直接补填或替换，不新增重复条目；替换已有密码会重新验证。`generate=1` 在本地生成 32 位随机密码。不指定标题时，可逐个选择账号或新增条目。
+
+`pass field=字段名` 取用对应的自定义字段，省略标题时选择包含该字段的条目，包括基础信息条目。字段名须与库中一致；不存在时报告错误，不回退到密码。原生 CLI 使用 `id pass --id example --title Proton --field 恢复短语`，加 `--show` 明文查看。独立 CLI 的明文输出可能留在终端滚屏中；TUI 临时查看返回后清屏，但终端录制仍可能保留内容。
 
 SSH 下使用 OSC 52 适配本地终端，并提供人工粘贴自测。终端支持不能仅靠环境变量可靠判断。无法复制时不会声称成功；可在 `make settings` 允许明文显示，并随时撤销。明文显示会进入终端滚屏记录。
 
@@ -83,7 +89,21 @@ make item id=example cat=id-info key=姓名 value='Example Name' note='常用姓
 make item id=example cat=contact key=电话号码 value='5550100' note='工作号码'
 make item id=example cat=account key=GitHub value=example-user note='开发账号'
 make event id=example title='更新恢复方式' detail='已在本地核对'
-make show id=example
+make manage id=example type=info
 ```
 
-这些命令会在本地解锁 KDBX，只用于普通资料。机密字段请使用管理界面的受保护输入。`show` 不显示密码或受保护字段的值。
+## 命令整理
+
+`make help` 按用途分组；日常录入、查看与附件操作集中在 `manage`，`item`、`event` 与授权命令供自动化使用。以下重复命令及对应 Rust CLI 子命令已移除：
+
+| 旧 Make 命令 | 现在使用 |
+| --- | --- |
+| `list`、`show` | `manage` |
+| `pass-list` | `manage type=password` |
+| `pass-add-manual`、`pass-edit` | `pass-set` |
+| `pass-add` | `pass-set generate=1` |
+| `pass-show` | `pass show=1` |
+
+直接调用 Rust CLI 时，对应参数为 `id pass-set --generate`、`id pass --show`；所有身份移除都必须本地确认，没有免确认删除选项。
+
+`item`、`event` 在本地解锁 KDBX 后写入普通资料。机密字段请使用管理界面的受保护输入。

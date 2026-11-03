@@ -161,7 +161,7 @@ class CliTests(unittest.TestCase):
         t.finish()
 
     def test_hidden_input_add_password_and_wrong_master(self):
-        t = Terminal(self, ["pass-add-manual", "--id", "alice", "--title", "GitHub", "--user", "tester"])
+        t = Terminal(self, ["pass-set", "--id", "alice", "--title", "GitHub", "--user", "tester"])
         t.expect("主密码:")
         t.send(MASTER + "\r")
         t.expect("新条目密码:")
@@ -231,12 +231,12 @@ class CliTests(unittest.TestCase):
 
     def test_plaintext_fails_closed_and_reauthenticates(self):
         self.add()
-        t = Terminal(self, ["pass-show", "--id", "alice", "--title", "GitHub"])
+        t = Terminal(self, ["pass", "--show", "--id", "alice", "--title", "GitHub"])
         t.expect("明文显示已禁用")
         output = t.finish(1)
         self.assertNotIn("主密码:".encode(), output)
         (self.root / "config/config.toml").write_text("[terminal]\nallow_plaintext = true\n")
-        t = Terminal(self, ["pass-show", "--id", "alice", "--title", "查一下我的github密码"])
+        t = Terminal(self, ["pass", "--show", "--id", "alice", "--title", "查一下我的github密码"])
         t.expect("再次验证主密码:")
         t.send(MASTER + "\r")
         t.expect("选择密码条目")
@@ -331,6 +331,88 @@ class CliTests(unittest.TestCase):
         t.expect('新旧两个密码库');t.finish(1)
         self.assertEqual(flat.read_bytes(),before)
 
+    def test_remove_archives_flat_and_legacy_identities_without_losing_files(self):
+        self.add();self.add(name='bob')
+        legacy = self.root / 'identities/alice'
+        (legacy/'extra.txt').write_text('synthetic legacy document')
+        bob_old = self.root / 'identities/bob/passwords/bob.kdbx'
+        flat = self.root / 'identities/bob.kdbx';bob_old.rename(flat)
+        old = self.root / 'backups/legacy-identities';old.mkdir(parents=True)
+        (self.root/'identities/bob').rename(old/'bob')
+        originals = {'alice': (legacy/'passwords/alice.kdbx').read_bytes(), 'bob': flat.read_bytes()}
+        for name in ['alice','bob']:
+            with self.subTest(identity=name):
+                t=Terminal(self,['remove','--id',name])
+                t.expect('移除身份 '+name);t.send(DOWN+ENTER)
+                t.expect('再次验证主密码:');t.assert_fullscreen_active();t.send(MASTER+'\r')
+                t.expect('已移除身份 '+name);output=t.finish()
+                archived=list((self.root/'backups/removed-identities').glob(name+'-*'))
+                self.assertEqual(len(archived),1)
+                vault=archived[0]/('alice/passwords/alice.kdbx' if name=='alice' else 'bob.kdbx')
+                self.assertEqual(vault.read_bytes(),originals[name])
+                self.assertEqual(archived[0].stat().st_mode&0o777,0o700)
+                self.assertEqual(vault.stat().st_mode&0o777,0o600)
+                self.assertFalse((self.root/f'identities/{name}.kdbx').exists())
+                self.assertFalse((self.root/f'identities/{name}').exists())
+                self.assertNotIn(name+'  KDBX',self.run_cli('status').stdout)
+                self.assertNotIn(PASSWORD.encode(),output)
+                if name=='alice':
+                    self.assertEqual((archived[0]/'alice/extra.txt').read_text(),'synthetic legacy document')
+                    self.assertEqual(flat.read_bytes(),originals['bob'])
+
+    def test_remove_cancel_wrong_password_and_busy_lock_preserve_identity(self):
+        self.add()
+        vault=self.root/'identities/alice/passwords/alice.kdbx';before=vault.read_bytes()
+        archive=self.root/'backups/removed-identities'
+        t=Terminal(self,['remove','--id','alice']);t.expect('移除身份 alice');t.send(ENTER)
+        t.expect('已取消移除');output=t.finish()
+        self.assertNotIn('主密码:'.encode(),output)
+        self.assertFalse(archive.exists());self.assertEqual(vault.read_bytes(),before)
+        for value, code, error in [('wrong-synthetic-master\r',1,'解锁失败'),(b'\x03',130,'已取消')]:
+            t=Terminal(self,['remove','--id','alice']);t.expect('移除身份 alice');t.send(DOWN+ENTER)
+            t.expect('再次验证主密码:');t.send(value);t.expect(error);output=t.finish(code)
+            self.assertNotIn(b'wrong-synthetic-master',output)
+            self.assertFalse(archive.exists());self.assertEqual(vault.read_bytes(),before)
+        lock=self.root/'config/.cache/vault-locks/alice.lock';lock.parent.mkdir(parents=True,exist_ok=True)
+        with lock.open('w') as held:
+            fcntl.flock(held,fcntl.LOCK_EX)
+            t=Terminal(self,['remove','--id','alice']);t.expect('移除身份 alice');t.send(DOWN+ENTER)
+            t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('另一个 ID 操作');t.finish(1)
+        self.assertFalse(archive.exists());self.assertEqual(vault.read_bytes(),before)
+        t=Terminal(self,['remove','--id','../bob']);t.expect('身份名只能');t.finish(1)
+
+    def test_remove_revokes_only_selected_identity_grants(self):
+        self.add();self.add(name='bob')
+        tokens={}
+        for name in ['alice','bob']:
+            t=Terminal(self,['grant','--id',name,'--title','GitHub'])
+            t.expect('主密码:');t.send(MASTER+'\r');t.expect('token:');output=t.finish()
+            tokens[name]=re.search(rb'token: ([a-f0-9]{32})',output)[1].decode()
+        t=Terminal(self,['remove','--id','alice']);t.expect('移除身份 alice');t.send(DOWN+ENTER)
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('已移除身份 alice');t.finish()
+        active=self.run_cli('grants').stdout
+        self.assertNotIn(tokens['alice'],active);self.assertIn(tokens['bob'],active)
+        self.run_cli('use','--token',tokens['alice'],'--cmd','printf revoked',code=1)
+        self.assertIn('kept',self.run_cli('use','--token',tokens['bob'],'--cmd','printf kept').stdout)
+
+    def test_consolidated_make_commands_generate_password_and_reject_old_commands(self):
+        result=subprocess.run(['make','--no-print-directory','help'],cwd=ROOT,env=self.env,text=True,capture_output=True,check=True)
+        self.assertIn('日常使用',result.stdout);self.assertIn('身份管理',result.stdout)
+        help_text=self.run_cli('--help').stdout
+        for old in ['list','pass-list','pass-add','pass-add-manual','pass-edit','pass-show','show']:
+            self.assertNotRegex(result.stdout,rf'(?m)^  {old}\s')
+            self.assertNotRegex(help_text,rf'(?m)^  {old}\s')
+            self.run_cli(old,code=2)
+        t=Terminal(self,[],env={'ID_ROOT':str(self.root)},command=['make','--no-print-directory','pass-set','id=alice','title=Generated','user=tester','generate=1'])
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('密码已保存');output=t.finish()
+        entry=self.entries()[0];values=self.values(entry)
+        self.assertEqual(len(values['Password']),32);self.assertEqual(values['UserName'],'tester')
+        self.assertNotIn(values['Password'].encode(),output)
+        self.assertNotIn('新条目密码:'.encode(),output)
+        config=self.root/'config/config.toml';config.write_text('[terminal]\nallow_plaintext=true\n')
+        t=Terminal(self,[],env={'ID_ROOT':str(self.root)},command=['make','--no-print-directory','pass','id=alice','title=Generated','show=1'])
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect(values['Password']);t.finish()
+
     def test_tag_rebuild_matches_escaped_titles_preserves_password_and_attachment(self):
         self.add("A & B")
         attachment = self.root / "test-attachment.txt"
@@ -400,12 +482,111 @@ class CliTests(unittest.TestCase):
         self.add()
         config = self.root / "config/config.toml"
         config.write_text("[terminal]\nallow_plaintext = true\n")
-        t = Terminal(self, ["pass-show", "--id", "alice", "--title", "GitHub"])
+        t = Terminal(self, ["pass", "--show", "--id", "alice", "--title", "GitHub"])
         t.expect("再次验证主密码:")
         config.write_text("[terminal]\nallow_plaintext = false\n")
         t.send(MASTER + "\r")
         t.expect("明文显示已禁用")
         self.assertNotIn(PASSWORD.encode(), t.finish(1))
+
+    def protected_field_fixture(self, value, name='alice', title='Proton'):
+        self.add(title, name=name)
+        root=ET.fromstring(self.keepass(name,'export'))
+        entry=next(e for e in root.findall('.//Entry') if self.values(e).get('Title')==title)
+        field=ET.SubElement(entry,'String');ET.SubElement(field,'Key').text='恢复码'
+        ET.SubElement(field,'Value',ProtectInMemory='True').text=value
+        source=self.root/f'{name}-synthetic.xml';ET.ElementTree(root).write(source,encoding='utf-8')
+        imported=self.root/f'{name}-imported.kdbx'
+        result=subprocess.run(['keepassxc-cli','import','-q','-p',str(source),str(imported)],
+                              input=MASTER+'\n'+MASTER+'\n',text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,'Synthetic protected-field fixture import failed')
+        vault=self.root/f'identities/{name}/passwords/{name}.kdbx';imported.replace(vault);vault.chmod(0o600)
+
+    def test_field_cli_requires_permission_reauth_and_exact_field_without_password_fallback(self):
+        secret='001234\nSYNTHETIC-RECOVERY-END'
+        self.protected_field_fixture(secret)
+        self.protected_field_fixture('SYNTHETIC-BOB-ONLY',name='bob')
+        vault=self.root/'identities/alice/passwords/alice.kdbx';before=vault.read_bytes()
+        args=['pass','--show','--id','alice','--title','Proton','--field','恢复码']
+        t=Terminal(self,args);t.expect('明文显示已禁用');output=t.finish(1)
+        self.assertNotIn('主密码:'.encode(),output)
+        config=self.root/'config/config.toml';config.write_text('[terminal]\nallow_plaintext=true\n')
+        t=Terminal(self,args);t.expect('再次验证主密码:');config.write_text('[terminal]\nallow_plaintext=false\n')
+        t.send(MASTER+'\r');t.expect('明文显示已禁用');output=t.finish(1)
+        self.assertNotIn(b'001234',output)
+        config.write_text('[terminal]\nallow_plaintext=true\n')
+        t=Terminal(self,args);t.expect('再次验证主密码:');t.send('synthetic-wrong-master\r')
+        t.expect('密码库解锁失败');self.assertNotIn(b'001234',t.finish(1))
+        t=Terminal(self,[],env={'ID_ROOT':str(self.root)},command=['make','--no-print-directory','pass','id=alice','title=Proton','field=恢复码','show=1'])
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('SYNTHETIC-RECOVERY-END');output=t.finish()
+        self.assertIn(b'001234\r\nSYNTHETIC-RECOVERY-END',output)
+        self.assertNotIn(b'SYNTHETIC-BOB-ONLY',output);self.assertNotIn(PASSWORD.encode(),output)
+        t=Terminal(self,args[:-1]+['missing']);t.expect('再次验证主密码:');t.send(MASTER+'\r')
+        t.expect('字段不存在');output=t.finish(1)
+        self.assertNotIn(PASSWORD.encode(),output);self.assertNotIn(b'001234',output)
+        t=Terminal(self,['pass','--show','--id','alice','--field','恢复码'])
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('选择字段所在条目');t.send(ENTER)
+        t.expect('SYNTHETIC-RECOVERY-END');output=t.finish()
+        self.assertEqual(output.count('再次验证主密码:'.encode()),1)
+        self.assertEqual(vault.read_bytes(),before)
+        self.protected_field_fixture('SYNTHETIC\x7fCONTROL',title='Unsafe')
+        t=Terminal(self,['pass','--show','--id','alice','--title','Unsafe','--field','恢复码'])
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('包含终端控制字符')
+        self.assertNotIn(b'SYNTHETIC\x7fCONTROL',t.finish(1))
+
+    def test_field_ssh_clipboard_preserves_multiline_and_clears_without_plaintext(self):
+        secret='00001234\nSYNTHETIC-FIELD-RECOVERY'
+        self.protected_field_fixture(secret)
+        t=Terminal(self,['pass','--id','alice','--title','Proton','--field','恢复码'],
+                   env={'SSH_CONNECTION':'synthetic-field-ssh','SSH_TTY':'/dev/pts/synthetic'})
+        t.expect('q 跳过:')
+        marker=base64.b64decode(re.search(rb'\x1b]52;c;([^\x07]*)\x07',t.output)[1]).decode()
+        t.send(marker+'\r');t.expect('再次验证主密码:');t.send(MASTER+'\r')
+        t.expect('10 秒内粘贴');t.send(ENTER);output=t.finish()
+        values=re.findall(rb'\x1b]52;c;([^\x07]*)\x07',output)
+        self.assertIn(base64.b64encode(secret.encode()),values);self.assertEqual(values[-1],b'')
+        self.assertNotIn(b'SYNTHETIC-FIELD-RECOVERY',output);self.assertNotIn(PASSWORD.encode(),output)
+        self.assertEqual(output.count('再次验证主密码:'.encode()),1)
+
+    def test_manage_field_reveal_scroll_resize_hide_and_reauthenticate(self):
+        secret='SYNTHETIC-FIELD-TOP\n'+'\n'.join(f'0000{i:04}' for i in range(30))+'\nSYNTHETIC-FIELD-END'
+        self.protected_field_fixture(secret)
+        (self.root/'config/config.toml').write_text('[terminal]\nallow_plaintext=true\n')
+        t=Terminal(self,['manage','--id','alice'])
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('Enter 展开');t.send(ENTER)
+        t.expect('受保护');self.assertNotIn(b'SYNTHETIC-FIELD-TOP',t.output)
+        t.send('c');t.expect('选择字段');t.send(ENTER);t.expect('临时查看');t.send(DOWN+ENTER)
+        t.expect('再次验证主密码:');t.assert_fullscreen_active();t.send(MASTER+'\r')
+        t.expect('SYNTHETIC-FIELD-TOP');t.assert_fullscreen_active()
+        t.send(b'\x1b[6~'*3);t.expect('SYNTHETIC-FIELD-END')
+        fcntl.ioctl(t.slave,termios.TIOCSWINSZ,struct.pack('HHHH',14,50,0,0))
+        t.expect('字段 / 恢复码');t.send(b'\x1b[5~'*4);t.expect('SYNTHETIC-FIELD-TOP')
+        t.send(ENTER);t.expect('Enter 收起');start=t.position
+        t.send('c');t.expect('选择字段');t.send(ENTER);t.expect('临时查看');t.send(DOWN+ENTER)
+        t.expect('再次验证主密码:');t.send(b'\x1b');t.expect('回车返回');t.send(ENTER)
+        t.expect('主密码:');t.send(MASTER+'\r')
+        t.expect('Enter 收起');t.send('q');output=t.finish()
+        self.assertNotIn(b'SYNTHETIC-FIELD-TOP',output[start:])
+        self.assertNotIn(b'SYNTHETIC-FIELD-END',output[start:])
+        self.assertEqual(output.count(b'\x1b[?1049h'),1);self.assertEqual(output.count(b'\x1b[?1049l'),1)
+        logs=self.root/'logs/scripts.log'
+        if logs.exists():self.assertNotIn('SYNTHETIC-FIELD',logs.read_text())
+
+    def test_manage_field_view_revokes_live_and_never_changes_ai_snapshot(self):
+        secret='SYNTHETIC-LOCAL-FIELD-ONLY'
+        self.protected_field_fixture(secret)
+        config=self.root/'config/config.toml';config.write_text('[terminal]\nallow_plaintext=true\n')
+        t=Terminal(self,['manage','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r')
+        t.expect('Enter 展开');t.send(ENTER+'c'.encode());t.expect('选择字段');t.send(ENTER)
+        t.expect('临时查看');t.send(DOWN+ENTER);t.expect('再次验证主密码:');t.send(MASTER+'\r')
+        t.expect(secret);config.write_text('[terminal]\nallow_plaintext=false\n')
+        t.expect('明文显示已禁用');start=t.position;t.send(ENTER);t.expect('Enter 收起');t.send('q')
+        self.assertNotIn(secret.encode(),t.finish()[start:])
+        requests=self.ai_server([(200,{'choices':[{'message':{'content':json.dumps({'reply':'已查询'})}}]})])
+        t=Terminal(self,['ai','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r');t.expect('空行提交')
+        t.send('查看我的普通账号资料\r\r');t.expect('下一步');t.send(ENTER);t.expect('空行提交');t.send('/quit\r\r')
+        self.assertNotIn(secret.encode(),t.finish())
+        self.assertNotIn(secret,json.dumps(requests,ensure_ascii=False))
 
     def test_secret_settings_are_private_and_cancellation_does_not_save(self):
         t = Terminal(self, ["settings"])
@@ -885,10 +1066,10 @@ class CliTests(unittest.TestCase):
     def test_empty_password_account_is_visible_and_edit_reuses_same_entry(self):
         self.item(key='Telegram',category='account',value='tester')
         initial=self.entries()[0].findtext('UUID')
-        t=Terminal(self,['pass-add-manual','--id','alice','--title','Telegram'])
+        t=Terminal(self,['pass-set','--id','alice','--title','Telegram'])
         t.expect('主密码:');t.send(MASTER+'\r');t.expect('新条目密码:');t.send(PASSWORD+'\r');t.expect('密码已保存');t.finish()
         self.assertEqual(len(self.entries()),1);self.assertEqual(self.entries()[0].findtext('UUID'),initial)
-        t=Terminal(self,['list','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r');t.expect('已设置');t.send('3');t.expect('Enter 展开');t.send('q')
+        t=Terminal(self,['manage','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r');t.expect('已设置');t.send('3');t.expect('Enter 展开');t.send('q')
         self.assertEqual(t.finish().count('主密码:'.encode()),1)
 
     def test_kdbx_cli_ignores_legacy_database_and_has_no_migration_command(self):
@@ -950,7 +1131,7 @@ class CliTests(unittest.TestCase):
 
     def test_concurrent_vault_update_is_not_overwritten(self):
         self.item(key='Telegram',category='account',value='tester')
-        t=Terminal(self,['pass-add-manual','--id','alice','--title','Telegram'])
+        t=Terminal(self,['pass-set','--id','alice','--title','Telegram'])
         t.expect('主密码:');t.send(MASTER+'\r');t.expect('新条目密码:')
         self.add('Concurrent change')
         t.send('SYNTHETIC-UNSAVED\r')
@@ -1172,7 +1353,7 @@ class CliTests(unittest.TestCase):
         self.item(key='Work/GitHub',category='account',value='tester')
         self.assertEqual(self.values(self.entries_in_group('Work')[0])['Title'],'GitHub')
         self.item(key='Mail',category='account',value='synthetic@example.com')
-        t=Terminal(self,['pass-add-manual','--id','alice','--title','Mail'])
+        t=Terminal(self,['pass-set','--id','alice','--title','Mail'])
         t.expect('主密码:');t.send(MASTER+'\r');t.expect('新条目密码:');t.send(PASSWORD+'\r');t.expect('密码已保存');t.finish()
         t=Terminal(self,['grant','--id','alice','--title','Mail'])
         t.expect('主密码:');t.send(MASTER+'\r');t.expect('token:');output=t.finish()
@@ -1180,7 +1361,7 @@ class CliTests(unittest.TestCase):
         result=self.run_cli('use','--token',token,'--cmd','printf "%s" "$ID_SECRET"')
         self.assertEqual(result.stdout,'***')
         (self.root/'config/config.toml').write_text('[terminal]\nallow_plaintext = true\n')
-        t=Terminal(self,['pass-show','--id','alice','--title','Mail'])
+        t=Terminal(self,['pass', '--show','--id','alice','--title','Mail'])
         t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect(PASSWORD);t.finish()
         self.assertEqual(len(self.entries()),2)
 

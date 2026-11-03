@@ -173,7 +173,10 @@ pub fn settings(project: &Project) -> Result<()> {
             format!("AI 模型          {}", cfg.ai.model),
             format!("思考模式         {}", toggle(cfg.ai.thinking)),
             format!("思考预算         {} token", cfg.ai.thinking_budget),
-            format!("明文显示密码     {}", toggle(cfg.terminal.allow_plaintext)),
+            format!(
+                "明文显示密码 / 字段  {}",
+                toggle(cfg.terminal.allow_plaintext)
+            ),
             "保存并退出".into(),
             "取消".into(),
         ];

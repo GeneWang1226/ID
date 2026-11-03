@@ -1,6 +1,6 @@
 use crate::{Project, identity, kdbx, private_dir, ui, valid_name, vault::Session};
 use anyhow::{Context, Result, ensure};
-use std::{fs, io::Write};
+use std::{fs, io::Write, path::PathBuf};
 
 pub fn new_identity(project: &Project, name: &str) -> Result<()> {
     valid_name(name)?;
@@ -35,6 +35,42 @@ pub fn new_identity(project: &Project, name: &str) -> Result<()> {
     }
     log(project, &format!("identity create-or-keep {name}"))?;
     Ok(())
+}
+
+pub fn remove_identity(
+    project: &Project,
+    name: &str,
+    session: &Session,
+) -> Result<Option<PathBuf>> {
+    let vault = identity::vault(project, name)?;
+    if !ui::confirm(&format!(
+        "移除身份 {name}？原文件将归档到本机 backups/removed-identities。"
+    ))? {
+        return Ok(None);
+    }
+    session.unlock(&vault, true)?;
+    let _lock = kdbx::WriteLock::acquire(project, name)?;
+    let source = if vault.parent() == Some(project.root.join("identities").as_path()) {
+        vault
+    } else {
+        project.root.join("identities").join(name)
+    };
+    project.contained(&source)?;
+    let folder = project.root.join("backups/removed-identities");
+    project.contained(&folder)?;
+    private_dir(&folder)?;
+    let archive = tempfile::Builder::new()
+        .prefix(&format!("{name}-"))
+        .tempdir_in(&folder)?
+        .keep();
+    private_dir(&archive)?;
+    let target = archive.join(source.file_name().context("身份路径无效")?);
+    project.contained(&target)?;
+    crate::grants::revoke_identity(name)?;
+    fs::rename(&source, &target).context("归档失败，身份原文件保留")?;
+    session.lock();
+    log(project, &format!("identity removed {name}")).context("身份已归档，但操作日志写入失败")?;
+    Ok(Some(target))
 }
 
 pub fn log(project: &Project, operation: &str) -> Result<()> {

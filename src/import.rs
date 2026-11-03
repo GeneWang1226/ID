@@ -284,10 +284,11 @@ pub fn fill(
     identity: &str,
     title: Option<&str>,
     username: Option<&str>,
+    generate: bool,
     session: &Session,
 ) -> Result<()> {
     if title.is_some_and(|t| !t.is_empty()) {
-        store::write_password(project, identity, title, username, false, false, session)?;
+        store::write_password(project, identity, title, username, false, generate, session)?;
         return Ok(());
     }
     let store = Store::open(project, identity, session)?;
@@ -317,7 +318,7 @@ pub fn fill(
             return Ok(());
         };
         if i == items.len() {
-            store::write_password(project, identity, None, username, false, false, session)?;
+            store::write_password(project, identity, None, username, false, generate, session)?;
         } else {
             store::write_password(
                 project,
@@ -325,7 +326,7 @@ pub fn fill(
                 Some(&items[i].title()),
                 None,
                 items[i].password_set,
-                false,
+                generate,
                 session,
             )?;
         }

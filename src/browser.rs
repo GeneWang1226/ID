@@ -230,7 +230,7 @@ impl Browser {
                 lines.push(if self.expanded {
                     format!(
                         "{}{}",
-                        ui::color("e 修改  o 操作  f 删字段  ", "2"),
+                        ui::color("c 字段  e 修改  o 操作  f 删字段  ", "2"),
                         ui::color("x 删整条  q 退出", "31")
                     )
                 } else {
@@ -269,7 +269,7 @@ impl Browser {
                         self.expanded = !self.expanded;
                         follow = true;
                     }
-                    KeyCode::Char(c @ ('e' | 'o' | 'f' | 'x'))
+                    KeyCode::Char(c @ ('e' | 'o' | 'f' | 'x' | 'c'))
                         if self.expanded && !current.is_empty() =>
                     {
                         return Ok(Action::Record(pages[self.page].start + self.selected, c));
@@ -386,6 +386,7 @@ pub fn manage(
                             "导出附件",
                             "删除字段",
                             "删除整条",
+                            "取用字段",
                         ];
                         let Some(i) = ui::choose(
                             &item.key,
@@ -394,7 +395,7 @@ pub fn manage(
                         else {
                             return Ok(());
                         };
-                        key = ['e', 'v', 'a', 'p', 'c', 'i', 't', 's', 'f', 'x'][i];
+                        key = ['e', 'v', 'a', 'p', 'P', 'i', 't', 's', 'f', 'x', 'c'][i];
                     }
                     match key {
                         'e' => {
@@ -438,13 +439,15 @@ pub fn manage(
                                 session,
                             )?;
                         }
-                        'c' if item.category == "account" => crate::clipboard::pass(
+                        'P' if item.category == "account" => crate::clipboard::pass(
                             project,
                             identity,
                             Some(&item.title()),
+                            "Password",
                             false,
                             session,
                         )?,
+                        'c' => use_field(&store, item)?,
                         'i' => {
                             let labels = store::ICONS
                                 .iter()
@@ -491,6 +494,42 @@ pub fn manage(
             let _ = ui::input("回车返回 ");
         }
     }
+}
+fn use_field(store: &Store, item: &Item) -> Result<()> {
+    anyhow::ensure!(
+        !item.fields.is_empty(),
+        "此条目没有自定义字段，可在操作菜单添加"
+    );
+    let choices = item
+        .fields
+        .iter()
+        .map(|f| {
+            format!(
+                "{}{}",
+                f.name,
+                if f.value.is_none() {
+                    " · 受保护"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    let Some(index) = ui::choose("选择字段", &choices)? else {
+        return Ok(());
+    };
+    let field = &item.fields[index].name;
+    let Some(action) = ui::choose(field, &["复制字段".into(), "临时查看".into()])? else {
+        return Ok(());
+    };
+    crate::clipboard::pass(
+        store.project,
+        store.identity,
+        Some(&item.title()),
+        field,
+        action == 1,
+        store.session,
+    )
 }
 fn new_record(store: &Store) -> Result<()> {
     let Some(kind) = ui::choose(

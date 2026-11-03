@@ -27,6 +27,7 @@
 | 任务 | 做法 |
 | --- | --- |
 | 新增身份 | 运行 `make new id=<name>`，由用户在终端设置并确认独立主密码；不再读取配置中的初始密码。自动创建原生 `ID_info/<身份名>` 基础信息条目，再用 `make manage` 补充字段。已有库不覆盖、不重置 |
+| 移除身份 | 用户明确指定要移除的身份后，引导其本地运行 `make remove id=<name>`，确认并重新验证；原文件保留在 `backups/removed-identities/`，临时凭证撤销。不要手工删除库或归档 |
 | 记录身份偏好 | 请用户通过 `make manage` 写入该身份 KDBX 的“基础信息”条目 |
 | 找某个身份的信息 | KDBX 内容由用户本地解锁查询，不要由 AI 导出密码库；如任务涉及旧身份目录，先读其 `AGENTS.md` 和 `profile.md`，旧档案不再是日常存储 |
 | 让 AI 用密码干活 | 请用户 `make grant` 签发临时凭证，AI 只拿 token 用 `make use` 代执行；条目 Tags 分级：`ai-auto` 限时多次、无标签一次性、`ai-deny` 禁止 |

@@ -42,8 +42,12 @@ enum Commands {
         #[command(flatten)]
         identity: Identity,
     },
+    /// 移除身份，将原文件归档到本机 backups/removed-identities
+    Remove {
+        #[command(flatten)]
+        identity: Identity,
+    },
     /// 管理账号、密码和个人信息
-    #[command(alias = "list")]
     Manage {
         #[command(flatten)]
         identity: Identity,
@@ -52,35 +56,21 @@ enum Commands {
         #[arg(long = "cat", env = "ID_LIST_CATEGORY", default_value = "")]
         category: String,
     },
-    /// 查看密码条目
-    PassList {
-        #[command(flatten)]
-        identity: Identity,
-    },
-    /// 复制密码，SSH 下适配终端剪贴板
+    /// 复制密码或指定字段；--show 明文查看，须设置允许并重新验证
     Pass {
         #[command(flatten)]
         entry: Entry,
+        #[arg(long, env = "ID_ENTRY_FIELD", default_value = "Password")]
+        field: String,
+        #[arg(long, env = "ID_PASS_SHOW", value_parser = clap::builder::BoolishValueParser::new())]
+        show: bool,
     },
-    /// 明文显示密码，需要全局允许和重新验证
-    PassShow {
+    /// 新增或修改密码；--generate 生成强密码
+    PassSet {
         #[command(flatten)]
         entry: Entry,
-    },
-    /// 手动录入密码
-    PassAddManual {
-        #[command(flatten)]
-        entry: Entry,
-    },
-    /// 生成强密码并保存
-    PassAdd {
-        #[command(flatten)]
-        entry: Entry,
-    },
-    /// 修改已有密码
-    PassEdit {
-        #[command(flatten)]
-        entry: Entry,
+        #[arg(long, env = "ID_PASS_GENERATE", value_parser = clap::builder::BoolishValueParser::new())]
+        generate: bool,
     },
     /// 修改密码库主密码
     Passwd {
@@ -119,11 +109,6 @@ enum Commands {
         title: Option<String>,
         #[arg(long, env = "ID_EVENT_DETAIL")]
         detail: Option<String>,
-    },
-    /// 查看当前身份的资料与事件
-    Show {
-        #[command(flatten)]
-        identity: Identity,
     },
     /// 备份所有身份的加密密码库
     Backup,
@@ -193,6 +178,20 @@ fn run() -> Result<()> {
             let name = ask(identity.id, "新身份名: ")?;
             maintenance::new_identity(&project, &name)?;
         }
+        Commands::Remove { identity } => {
+            let terminal = ui::Terminal::new(true)?;
+            let id = role(&project, identity)?;
+            let archive = maintenance::remove_identity(&project, &id, &session)?;
+            drop(terminal);
+            if let Some(path) = archive {
+                println!(
+                    "已移除身份 {id}，原文件保留在 {}。",
+                    path.strip_prefix(&project.root)?.display()
+                );
+            } else {
+                println!("已取消移除。");
+            }
+        }
         Commands::Manage {
             identity,
             view,
@@ -202,50 +201,25 @@ fn run() -> Result<()> {
             let id = role(&project, identity)?;
             browser::manage(&project, &id, view, category, &session)?;
         }
-        Commands::PassList { identity } => {
-            let _terminal = ui::Terminal::new(true)?;
-            let id = role(&project, identity)?;
-            browser::manage(&project, &id, "password".into(), String::new(), &session)?;
-        }
-        Commands::Pass { entry } => {
+        Commands::Pass { entry, field, show } => {
             let id = role(&project, entry.identity)?;
-            clipboard::pass(&project, &id, entry.title.as_deref(), false, &session)?;
+            clipboard::pass(
+                &project,
+                &id,
+                entry.title.as_deref(),
+                &field,
+                show,
+                &session,
+            )?;
         }
-        Commands::PassShow { entry } => {
-            let id = role(&project, entry.identity)?;
-            clipboard::pass(&project, &id, entry.title.as_deref(), true, &session)?;
-        }
-        Commands::PassAddManual { entry } => {
+        Commands::PassSet { entry, generate } => {
             let id = role(&project, entry.identity)?;
             import::fill(
                 &project,
                 &id,
                 entry.title.as_deref(),
                 entry.user.as_deref(),
-                &session,
-            )?;
-        }
-        Commands::PassAdd { entry } => {
-            let id = role(&project, entry.identity)?;
-            store::write_password(
-                &project,
-                &id,
-                entry.title.as_deref(),
-                entry.user.as_deref(),
-                false,
-                true,
-                &session,
-            )?;
-        }
-        Commands::PassEdit { entry } => {
-            let id = role(&project, entry.identity)?;
-            store::write_password(
-                &project,
-                &id,
-                entry.title.as_deref(),
-                entry.user.as_deref(),
-                true,
-                false,
+                generate,
                 &session,
             )?;
         }
@@ -306,26 +280,6 @@ fn run() -> Result<()> {
                 &optional(detail, "详情（可空）: ")?,
             )?;
             println!("已记录。");
-        }
-        Commands::Show { identity } => {
-            let id = role(&project, identity)?;
-            let s = Store::open(&project, &id, &session)?;
-            for item in s.items(&id)? {
-                println!(
-                    "{} / {} = {}\n  {}",
-                    ui::clean(&item.category),
-                    ui::clean(&item.key),
-                    ui::clean(&item.value),
-                    ui::clean(&item.remark())
-                );
-                for field in &item.fields {
-                    println!(
-                        "  {} = {}",
-                        ui::clean(&field.name),
-                        ui::clean(field.value.as_deref().unwrap_or("••••（受保护）"))
-                    );
-                }
-            }
         }
         Commands::Organize { identity } => {
             let id = role(&project, identity)?;
