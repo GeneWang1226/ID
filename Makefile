@@ -1,7 +1,18 @@
 # 参数通过环境变量交给 Rust，避免把资料拼进 shell 命令。
 .DEFAULT_GOAL := help
-CARGO ?= cargo
+CARGO ?= $(shell command -v cargo 2>/dev/null || { \
+	cargo_path="$${CARGO_HOME:-$$HOME/.cargo}/bin/cargo"; \
+	if [ -x "$$cargo_path" ]; then printf '%s' "$$cargo_path"; else printf '%s' cargo; fi; })
 BIN := target/debug/id
+
+define require_cargo
+	@command -v "$(CARGO)" >/dev/null 2>&1 || { \
+		printf '%s\n' '未找到 Cargo，需要安装 Rust 1.89+。' \
+		'安装：https://rust-lang.org/tools/install/' \
+		'已安装？加载环境：. "$$HOME/.cargo/env"，或用 make CARGO=/路径/cargo 指定。'; \
+		exit 1; \
+	}
+endef
 
 export ID_ENTRY_ID = $(value id)
 export ID_ENTRY_TITLE = $(value title)
@@ -59,7 +70,8 @@ help:
 	@awk 'BEGIN {FS = ":.*## "; print "使用：make <命令> [id=身份]"} /^##@ / {printf "\n%s\n", substr($$0, 5)} /^[a-z-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' Makefile
 
 $(BIN): Cargo.toml Cargo.lock $(wildcard src/*.rs)
-	@$(CARGO) build --locked
+	$(require_cargo)
+	@"$(CARGO)" build --locked
 
 ##@ 日常使用
 
@@ -131,8 +143,9 @@ revoke: $(BIN) ## 撤销凭证（token=... 或 all=1）
 build: $(BIN) ## 编译 Rust CLI
 
 test: ## 运行单元测试和终端集成测试
-	@$(CARGO) test --locked
-	@$(CARGO) build --locked
+	$(require_cargo)
+	@"$(CARGO)" test --locked
+	@"$(CARGO)" build --locked
 	@python3 -m unittest discover -s tests -v
 
 check: $(BIN) ## 检查追踪范围、忽略规则、权限和疑似机密

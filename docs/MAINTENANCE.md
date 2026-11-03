@@ -4,6 +4,18 @@
 
 安装 Rust 1.89+、Make、KeePassXC CLI（当前测试版本 2.7.10）。Linux 支持完整编辑。无需 Python 运行时、Node、Docker 或数据库服务；Python 仅用于终端集成测试。
 
+Debian 先安装基础依赖，再按 [Rust 官方安装说明](https://rust-lang.org/tools/install/) 安装当前 stable 工具链：
+
+```sh
+sudo apt install build-essential curl make keepassxc
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. "$HOME/.cargo/env"
+cargo --version
+rustc --version
+```
+
+Make 优先使用 PATH 中的 Cargo，也会检查 `${CARGO_HOME:-$HOME/.cargo}/bin/cargo`；自定义工具链可用 `make CARGO=/完整路径/cargo build`。缺少 Cargo 时给出安装提示。源码更新需要重新编译，Rust 工具链应安装在持久目录中，不能只放在 `/tmp`。
+
 ```sh
 make build
 make test

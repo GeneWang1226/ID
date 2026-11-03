@@ -6,7 +6,7 @@
 
 ## 开始使用
 
-需要 Linux、Rust 1.89+、Make 和 `keepassxc-cli`。Debian 可安装 `keepassxc` 与 `make`，Rust 使用 rustup 安装。
+需要 Linux、Rust 1.89+、Make 和 `keepassxc-cli`。Debian 的依赖与 Rust 安装命令见 [安装与检查](docs/MAINTENANCE.md#安装与检查)。Make 会识别 PATH 和常规 rustup 安装目录中的 Cargo。
 
 ```sh
 make build
