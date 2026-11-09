@@ -1,76 +1,99 @@
-# ID — 多身份信息管理
+# ID
 
-本目录用于集中管理多个身份的密码、文件与信息。
+在命令行里管理多个身份的账号、密码与个人资料。Rust 编写，提供全屏 TUI；KeePassXC 负责密码库的加解密，数据统一保存在每个身份自己的 KDBX 中。
 
-- **日常使用：[docs/GUIDE.md — 操作指引](docs/GUIDE.md)**
-- 安装、维护、故障排查：[docs/MAINTENANCE.md — 维护手册](docs/MAINTENANCE.md)
-- 版本变更：[CHANGELOG.md](CHANGELOG.md)
+不运行 Web 服务，不依赖 SQLite。可以用 KeePassXC 等兼容客户端打开同一密码库，用 Syncthing 同步加密文件。
 
-## 目录结构
+## 开始使用
 
-| 路径 | 说明 |
+需要 Linux、Rust 1.89+、Make 和 `keepassxc-cli`。Debian 的依赖与 Rust 安装命令见 [安装与检查](docs/MAINTENANCE.md#安装与检查)。Make 会识别 PATH 和常规 rustup 安装目录中的 Cargo。
+
+```sh
+make build
+make settings
+make new id=example
+make manage id=example
+```
+
+新建身份时输入并确认该身份的主密码，不再读取配置中的初始密码；同时创建原生 `ID_info/example` 基础信息条目，身份名自动填入。已有身份直接运行 `make manage`，方向键选身份并解锁；更换主密码使用 `make passwd`。详情见 [使用说明](docs/GUIDE.md)。
+
+## 数据怎么放
+
+| 内容 | KDBX 中的表示 |
 | --- | --- |
-| `docs/` | 文档：操作指引、维护手册 |
-| `template/` | 身份模板目录。新增身份时脚本会完整复制它 |
-| `identities/` | 所有身份目录，每个身份一个子目录（如 `identities/gene/`） |
-| `scripts/` | 工具脚本，如 `add-identity.sh` |
-| `Makefile` | 常用操作入口，`make help` 查看 |
-| `config/config.toml` | 可同步的非敏感配置：AI 接口、模型、思考开关、全局明文权限 |
-| `config/secrets/.secrets.env` / `config/secrets/.secrets.env.example` | 敏感配置：AI API key、KDBX 初始密码（真实文件权限 600，不进 git） |
-| `docker/.env` / `docker/.env.example` | Docker 配置：Web 访问密码（真实文件权限 600，不进 git，模板入库） |
-| `assets/` | 工具安装包（KeePassXC 各平台客户端等），只放安装包、不放身份数据 |
-| `web/` | Web 界面（Next.js），查看/编辑 SQLite 库里的非机密信息，Docker 部署 |
-| `data/` | SQLite 数据库文件（`id.db`），随 Syncthing 同步 |
-| `logs/` | 脚本操作日志（`scripts.log`，只记操作、不记秘密，权限 700） |
+| GitHub、Telegram 等普通账号 | 原生条目；标题、登录名、密码、网址和备注放在同一条目 |
+| 邮箱账号 | 专用 `ID_emails` 群组；服务商、应急联系方式、恢复资料等使用独立属性 |
+| 姓名、生日、电话、偏好等 | 一个“基础信息”条目，使用原生自定义字段，密码可以为空 |
+| 恢复码、API key 等 | 对应条目里的受保护自定义字段 |
+| PDF、应急说明等文件 | 对应条目的原生附件 |
+| 大事记 | 事件条目 |
+| 图标 | 原生 IconID；TUI 显示对应的文字图标，自定义图片保留在 KDBX |
 
-## 身份目录内的文件
+普通字段可设维度与备注；维度、字段备注和条目类型使用 KeePass CustomData，不把所有资料塞进一段 JSON。其他客户端仍可直接编辑原生字段和附件。自定义图片在终端用备用图标表示，不要求特定字体或图片协议。
 
-模板中的预设内容（每个身份都会有）：
+新身份创建时立即建立原生群组与基础信息条目；账号、事件按需建立群组：
 
-| 路径 | 说明 |
-| --- | --- |
-| `profile.md` | 该身份的档案：基本信息、喜好、习惯、备忘 |
-| `AGENTS.md` | 给 AI 的身份级指引 |
-| `passwords/<身份名>.kdbx` | 密码库，新建身份时按 `config/secrets/.secrets.env` 里的初始密码当场生成 |
-| `data/schema.sql` | SQLite 个人信息表结构（非机密数据，所有身份共用一个库） |
-| `documents/` | 证件扫描件、重要文件 |
-| `keys/` | SSH / GPG 密钥 |
-| `notes/` | 文本笔记 |
-| `recovery/` | 恢复码、助记词、备用验证方式 |
+```text
+ID_info
+└── example（基础信息，身份名 = example）
+ID_emails
+└── Proton、Gmail、163邮箱等条目
+ID
+├── 账号
+│   └── GitHub、Telegram 等条目
+└── 事件
+```
 
-## git 与 Syncthing 错开
+`ID`、`ID_info` 是本项目的命名约定，KDBX 不要求 `ID_` 前缀。旧库的 `ID/身份信息/基础信息` 日常编辑时继续复用；用户显式执行 `make organize` 才统一为 `ID_info/<身份名>`。分组及条目用原生 UUID 识别，分组用途在 CustomData 的 `ID.Group` 中记录；在 KeePassXC 中重命名群组后仍能复用。其他用户群组保留原位置，TUI 按实际群组展示；重名条目使用完整路径区分。项目是 KDBX 的命令行管理外壳，密码库可独立用其他兼容客户端管理。
 
-两类文件不叠在一起：
+旧库不会因为升级自动移动。运行 `make organize id=example`，本地解锁并确认后，基础信息统一为 `ID_info/example`，带项目标记的旧根条目归入相应用途的原生项目群组；保留 UUID、字段保护、密码、附件和历史，先留加密备份。其他用户群组不搬动，同名冲突则中止。更多群组的用途建议见 [使用说明](docs/GUIDE.md)。
 
-| 归谁 | 路径 |
-| --- | --- |
-| git（脚本、配置和文档） | `scripts/`、`template/`、`assets/`、`docs/`、`web/`、`docker/`（不含 `.env`）、`config/`（不含 secrets）、`Makefile`、`AGENTS.md`、`README.md`、`.gitignore`、`.stignore` |
-| Syncthing（身份数据） | `identities/`、`data/` |
-| 两边都不要 | `logs/`、`backups/`、`.git` |
+## 常用入口
 
-`.stignore` 排除 git 那一侧和 `.git`，避免仓库被同步写坏。`.gitignore` 排除身份数据。新设备克隆私有远程部署项目；只开 Syncthing 的话，那边不会有 `scripts/` 和 `template/`。
+```sh
+make manage                     # 全部资料
+make manage id=example type=info # 基础信息
+make pass id=example             # 选择条目、复制密码
+make pass id=example title=Proton field='恢复短语' # 复制自定义字段
+make pass-set id=example         # 在本地录入或修改密码
+make ai id=example               # 全屏 AI 助手
+make organize id=example         # 旧项目条目归入原生群组
+make backup                     # 备份各身份加密密码库
+make doctor                     # 只读检查身份目录异常
+make doctor id=example fix=1     # 本地确认后归档冲突副本、遗留备份
+make remove id=example          # 确认、验证后移除，原文件保留在本机归档
+make help
+```
 
-## keepassxc-cli 的局限（为什么打标签要绕道）
+TUI 中 Enter 展开详情，`c` 取用字段，`o` 操作，`n` 新增，`l` 锁定；方向键选择、翻页。字段可复制或临时查看，多行内容支持滚动，返回后隐藏。普通资料只解锁一次会话；取用自定义字段、修改密码、删除内容、导出附件和明文查看等操作需再次验证主密码。空闲五分钟清除缓存主密码，退出即锁定。
 
-`keepassxc-cli` 只是 KeePassXC 的附属工具，定位是查询和常见自动化，不少 GUI 功能没做进去：
+新增选择“邮箱”，会放入 `ID_emails`；展开后的“邮箱常用属性”提供恢复码、恢复短语、应急邮箱、应用密码等预设名称，仍可添加任意属性。已有邮箱通过 `make organize` 整理或在条目操作里“归为邮箱”；恢复资料保留原字段，已有不同值不覆盖。
 
-| 功能 | CLI | GUI |
-| --- | --- | --- |
-| 增删改条目、改主密码、生成密码、附件导入导出 | ✓ | ✓ |
-| 读写 Tags | 只能 `show` 读 | ✓ 可写 |
-| 自定义字段（TOTP 种子、额外属性） | 只能读 | ✓ 可写 |
-| 条目历史、回收站 | ✗ | ✓ |
-| Auto-Type 序列、浏览器集成配置 | ✗ | ✓ |
-| 自定义图标 | ✗ | ✓ |
+`make help` 按日常使用、身份管理、维护、自动化与授权、开发分组。密码录入统一用 `pass-set`，加 `generate=1` 生成强密码；`pass` 默认复制，加 `show=1` 明文查看（须设置允许）。重复的列表和密码命令已移除，替代关系见 [使用说明](docs/GUIDE.md#命令整理)。
 
-分级授权需要的 `ai-auto` / `ai-deny` 标签就是「只能读不能写」的那类。本项目的解法：
+AI 查询仅提供当前身份的普通资料及密码是否已填，不提供密码和受保护字段；本地密码操作不经过模型。AI 外部服务按需配置 API key，正常资料管理无需网络。不要把密码、主密码或恢复码输入聊天。
 
-- **服务器端**：`make tag id=<身份> title=<条目> tags=ai-deny`（[scripts/tag-entry.sh](scripts/tag-entry.sh)，原理是 `keepassxc-cli` 导出 XML → 注入标签 → 导入新库 → 验证后原子替换；临时 XML 只放 tmpfs 用完即删，主密码只经 stdin 传递）
-- **桌面端**：也可以在 KeePassXC 图形客户端里打，标签随 kdbx 经 Syncthing 同步
+AI 可用只读 `doctor` 工具诊断当前身份目录，只向模型提供异常类别和数量；修复操作由本地界面列出实际文件并确认。也可直接输入 `/doctor` 检查、`/repair` 归档，无需调用模型。冲突副本和遗留加密备份移入 `backups/identity-cleanup/`，正式库保留；临时文件、锁、空库、链接和未知资料仅提示，不自动删除。发现同步冲突时，CLI 写入会中止，即使未开启同步交接检查。
 
-## 安全规则
+## 安全与平台范围
 
-- 身份目录权限为 `700`，密钥类文件建议 `600`。
-- 本目录内容属于敏感数据，不要提交到任何公开仓库。
-- `.kdbx` 密码库始终用 KeePass(XC) 打开。各身份自己的主密码不要写进任何文件。
-- 新建空白库用的初始密码只放在 `config/secrets/.secrets.env`（权限 600，模板见 `config/secrets/.secrets.env.example`）。脚本不得把它打进日志或终端。
+本版本的资料写入使用 Linux 匿名内存文件，把修改交给 KeePassXC 导入、合并到原库副本，再原子替换；明文 XML 不落磁盘。保存保留已有加密参数、密码、历史、附件和自定义图标，自动留加密备份；检测到外部更新会拒绝覆盖。
+
+完整编辑目前支持 Linux，包括 SSH。其他平台尚未验证，也没有以明文临时文件回退的编辑路径。Rust 和清零缓冲区不能防止同用户调试、恶意软件、系统交换或系统被接管；本项目没有经过独立安全审计。KDBX 不提供跨设备事务锁，避免多端同时编辑同一身份。
+
+## 项目目录
+
+- `src/`：Rust CLI、TUI、KeePassXC 适配。
+- `identities/<身份>.kdbx`：一身份一文件，唯一的日常资料存储，不进 Git；兼容旧的 `<身份>/passwords/<身份>.kdbx` 路径，两处同时存在时拒绝选择，避免写错库。
+- `config/config.toml`：非敏感设置；`config/secrets/.secrets.env`：本机密钥。
+- `backups/vaults/`：本机加密备份；`backups/legacy-identities/`：整理时保留的旧身份目录；`backups/removed-identities/`：主动移除的身份原文件。旧目录归档可能包含明文档案，都不进 Git 或 Syncthing。
+- `exports/`：用户主动导出的明文附件，不进 Git 或 Syncthing。
+- `template/`：保留的旧身份模板，程序不再复制其目录；新身份仅创建 KDBX。
+- `tests/`：只使用临时身份和合成密码库的测试。
+
+```sh
+make test
+make check
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+```

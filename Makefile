@@ -1,179 +1,158 @@
-# ID 项目常用操作。用法: make <目标> [变量=值]（变量一律小写）
-# 所有目标的参数都缺省可交互输入。例:
-#   make show id=gene            直接执行
-#   make item id=gene            逐个询问分类/名称/内容/备注
-#   make pass-add id=gene        询问标题、用户名，再提示输主密码
+# 参数通过环境变量交给 Rust，避免把资料拼进 shell 命令。
+.DEFAULT_GOAL := help
+CARGO ?= $(shell command -v cargo 2>/dev/null || { \
+	cargo_path="$${CARGO_HOME:-$$HOME/.cargo}/bin/cargo"; \
+	if [ -x "$$cargo_path" ]; then printf '%s' "$$cargo_path"; else printf '%s' cargo; fi; })
+BIN := target/debug/id
 
-DB := data/id.db
-COMPOSE := docker compose -f docker/docker-compose.yml $(if $(wildcard docker/.env),--env-file docker/.env,)
+define require_cargo
+	@command -v "$(CARGO)" >/dev/null 2>&1 || { \
+		printf '%s\n' '未找到 Cargo，需要安装 Rust 1.89+。' \
+		'安装：https://rust-lang.org/tools/install/' \
+		'已安装？加载环境：. "$$HOME/.cargo/env"，或用 make CARGO=/路径/cargo 指定。'; \
+		exit 1; \
+	}
+endef
 
-# 颜色（仅终端输出时生效；管道/重定向自动无色）
-# 注意: $(shell) 的 stdout 被 make 捕获，所以要用 stderr 判断终端
-TTY := $(shell [ -t 2 ] && echo 1)
-ifeq ($(TTY),1)
-H  := \033[1;36m
-OK := \033[32m
-ER := \033[1;31m
-WN := \033[33m
-DM := \033[2m
-PR := \033[36m
-N  := \033[0m
+export ID_ENTRY_ID = $(value id)
+export ID_ENTRY_TITLE = $(value title)
+ifneq ($(origin field),undefined)
+export ID_ENTRY_FIELD = $(value field)
 endif
+ifneq ($(origin show),undefined)
+export ID_PASS_SHOW = $(value show)
+endif
+ifneq ($(origin generate),undefined)
+export ID_PASS_GENERATE = $(value generate)
+endif
+ifneq ($(origin fix),undefined)
+export ID_DOCTOR_FIX = $(value fix)
+endif
+ifneq ($(origin user),undefined)
+export ID_ENTRY_USER = $(value user)
+endif
+ifneq ($(origin file),undefined)
+export ID_INPUT_FILE = $(value file)
+endif
+ifneq ($(origin ttl),undefined)
+export ID_GRANT_TTL = $(value ttl)
+endif
+ifneq ($(origin tags),undefined)
+export ID_ENTRY_TAGS = $(value tags)
+endif
+ifneq ($(origin token),undefined)
+export ID_GRANT_TOKEN = $(value token)
+endif
+ifneq ($(origin cmd),undefined)
+export ID_GRANT_COMMAND = $(cmd)
+endif
+ifneq ($(origin cat),undefined)
+export ID_ITEM_CATEGORY = $(value cat)
+endif
+ifneq ($(origin key),undefined)
+export ID_ITEM_KEY = $(value key)
+endif
+ifneq ($(origin value),undefined)
+export ID_ITEM_VALUE = $(value value)
+endif
+ifneq ($(origin note),undefined)
+export ID_ITEM_NOTE = $(value note)
+endif
+ifneq ($(origin title),undefined)
+export ID_EVENT_TITLE = $(value title)
+endif
+ifneq ($(origin detail),undefined)
+export ID_EVENT_DETAIL = $(value detail)
+endif
+manage: export ID_LIST_TYPE = $(if $(value type),$(value type),all)
+manage: export ID_LIST_CATEGORY = $(value cat)
 
-.PHONY: help check settings clipboard-check new passwd pass pass-show list pass-list pass-add pass-add-manual pass-edit grant use grants revoke tag web web-stop web-logs db db-init show item event ai status backup
+.PHONY: help build test check settings clipboard-check new remove passwd pass pass-set manage grant use grants revoke tag item event ai status backup organize doctor
 
-help: ## 显示本帮助
-	@e=""; [ -t 1 ] && e=$$(printf '\033'); \
-	grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -v e="$$e" 'BEGIN {FS = ":.*?## "} { \
-		if (e == "") printf "  make %-16s %s\n", $$1, $$2; \
-		else printf "  %s[32mmake %-16s%s[0m %s[2m%s%s[0m\n", e, $$1, e, e, $$2, e }'
+help:
+	@awk 'BEGIN {FS = ":.*## "; print "使用：make <命令> [id=身份]"} /^##@ / {printf "\n%s\n", substr($$0, 5)} /^[a-z-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' Makefile
 
-check: ## 安全自检（ignore 规则/追踪/权限/明文扫描），提交或同步前跑一遍
-	@scripts/security-check.sh
+$(BIN): Cargo.toml Cargo.lock $(wildcard src/*.rs)
+	$(require_cargo)
+	@"$(CARGO)" build --locked
 
-settings: ## 方向键修改 AI 设置、API key 和全局明文权限
-	@scripts/settings.py
+##@ 日常使用
 
-clipboard-check: ## 重新自测当前 SSH 终端的本地剪贴板（只用测试文字）
-	@scripts/pass-ssh.py --check
+manage: $(BIN) ## 管理账号、密码、资料与附件；type=all/account/password/info，cat=维度
+	@$(BIN) manage
 
-new: ## 新增身份（id=gene）
-	@v="$(id)"; [ -n "$$v" ] || read -p "$$(printf '$(PR)身份名: $(N)')" v; \
-	[ -n "$$v" ] || { printf '$(ER)错误: 身份名不能为空$(N)\n' >&2; exit 1; }; \
-	scripts/add-identity.sh "$$v"
+ai: $(BIN) ## 全屏 AI 助手；file=非机密资料文件
+	@$(BIN) ai
 
-passwd: ## 修改某身份 kdbx 主密码（id=gene）
-	@v="$(id)"; [ -n "$$v" ] || v="$$(scripts/select-identity.sh)"; \
-	[ -n "$$v" ] || { printf '$(ER)错误: 身份名不能为空$(N)\n' >&2; exit 1; }; \
-	keepassxc-cli db-edit --set-password "identities/$$v/passwords/$$v.kdbx"
+pass: $(BIN) ## 复制密码或 field=字段名；title=条目，show=1 明文查看（须设置允许）
+	@$(BIN) pass
 
-pass: ## 复制密码（SSH 可按 v 回退明文；id=gene title="..."）
-	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
-	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	if [ -n "$${SSH_CONNECTION:-}" ]; then \
-		scripts/pass-ssh.py -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
-	else \
-		scripts/pass-ssh.py --native -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"; \
-	fi
+pass-set: $(BIN) ## 录入密码或 field=受保护字段；title=已有条目，generate=1 生成密码
+	@$(BIN) pass-set
 
-pass-show: ## 明文显示密码，仅限交互终端（id=gene title="..."）
-	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
-	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	scripts/pass-ssh.py --show -- "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
+settings: $(BIN) ## 方向键修改设置、API key 和全局明文权限
+	@$(BIN) settings
 
-list pass-list pass-add-manual pass-edit: export ID_ENTRY_ID = $(id)
-list pass-list pass-add-manual pass-edit: export ID_ENTRY_TITLE = $(title)
-list pass-list pass-add-manual pass-edit: export ID_ENTRY_USER = $(user)
+##@ 身份管理
 
-list: export ID_LIST_TYPE = $(if $(type),$(type),all)
-list: export ID_LIST_CATEGORY = $(cat)
-list: ## 分页查看账号、密码、个人信息（type=all/account/password/info；cat=信息维度）
-	@python3 scripts/account_store.py list
+new: $(BIN) ## 新建独立身份密码库（id=gene）
+	@$(BIN) new
 
-pass-list: ## 只查看密码条目，等同 make list type=password
-	@python3 scripts/account_store.py list --type password
+remove: $(BIN) ## 移除指定身份；确认、验证后归档原文件，不直接销毁
+	@$(BIN) remove
 
-pass-edit: ## 修改已有条目的密码（id/title 可选，缺省方向键选择）
-	@python3 scripts/account_store.py edit
+passwd: $(BIN) ## 修改密码库主密码（id=gene）
+	@$(BIN) passwd
 
-pass-add: ## 新增条目并自动生成强密码（id=gene，缺省逐个询问）
-	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
-	uv="$(user)";  [ -n "$$uv" ] || read -p "$$(printf '$(PR)用户名(可空): $(N)')" uv; \
-	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	keepassxc-cli add -g -L 20 -l -U -n -s --every-group --exclude-similar -u "$$uv" "identities/$$iv/passwords/$$iv.kdbx" "$$tv"
+status: $(BIN) ## 查看所有身份密码库状态
+	@$(BIN) status
 
-pass-add-manual: ## 方向键选账号或自定义条目，手动录入密码（id/title/user 可选）
-	@python3 scripts/account_store.py add
+##@ 维护
 
-grant: ## 签发临时凭证给 AI 用（id=gene title="..." ttl=600，缺省逐个询问）
-	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
-	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	scripts/grant-secret.sh "$$iv" "$$tv" $(if $(ttl),--ttl $(ttl),)
+doctor: $(BIN) ## 检查 identities 异常；id=身份，fix=1 确认后归档加密副本
+	@$(BIN) doctor
 
-use: ## 用凭证代执行命令（token=... cmd='curl -u "u:$$ID_SECRET" url'；cmd 里用双引号、别用单引号，$ 写 $$）
-	@tv="$(token)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)token: $(N)')" tv; \
-	[ -n "$$tv" ] || { printf '$(ER)错误: token 不能为空$(N)\n' >&2; exit 1; }; \
-	cv='$(cmd)'; [ -n "$$cv" ] || read -p "$$(printf '$(PR)命令: $(N)')" cv; \
-	[ -n "$$cv" ] || { printf '$(ER)错误: 命令不能为空$(N)\n' >&2; exit 1; }; \
-	scripts/secret-exec.sh "$$tv" -- "$$cv"
+backup: $(BIN) ## 备份各身份加密密码库到 backups/vaults/
+	@$(BIN) backup
 
-grants: ## 列出活跃临时凭证
-	@scripts/revoke-grant.sh --list
+organize: $(BIN) ## 整理 ID_info/身份名、ID_emails 与旧项目根条目（id=gene）
+	@$(BIN) organize
 
-revoke: ## 撤销凭证（token=... 或 all=1）
-	@if [ "$(all)" = "1" ]; then scripts/revoke-grant.sh --all; \
-	else tv="$(token)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)token: $(N)')" tv; \
-	[ -n "$$tv" ] || { printf '$(ER)错误: token 不能为空（或用 all=1）$(N)\n' >&2; exit 1; }; \
-	scripts/revoke-grant.sh "$$tv"; fi
+clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板
+	@$(BIN) clipboard-check
 
-tag: ## 给 kdbx 条目打/改/清标签（id=gene title="..." tags=ai-deny；tags= 空则清除）
-	@iv="$(id)";    [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	tv="$(title)"; [ -n "$$tv" ] || read -p "$$(printf '$(PR)条目标题: $(N)')" tv; \
-	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	gv='$(tags)'; [ -n "$$gv" ] || read -p "$$(printf '$(PR)标签(多个用;分隔，直接回车清除): $(N)')" gv; \
-	scripts/tag-entry.sh "$$iv" "$$tv" "$$gv"
+##@ 自动化与授权
 
-web: ## 构建并启动 Web 界面（http://localhost:3000）
-	@set -a; [ ! -f config/secrets/.secrets.env ] || . ./config/secrets/.secrets.env; set +a; $(COMPOSE) up -d --build
-	@printf '$(OK)Web 已启动: http://localhost:3000$(N)\n'
+item: $(BIN) ## 写入普通资料；cat=维度/account/email key=名称 value=内容 note=备注
+	@$(BIN) item
 
-web-stop: ## 停止 Web 界面
-	$(COMPOSE) down
+event: $(BIN) ## 记录事件；title=标题 detail=详情
+	@$(BIN) event
 
-web-logs: ## 查看 Web 日志
-	$(COMPOSE) logs -f web
+tag: $(BIN) ## 修改条目标签；title=条目 tags=ai-deny（tags= 清空）
+	@$(BIN) tag
 
-# 表结构是幂等的（IF NOT EXISTS），每次读写前跑一遍确保库已初始化
-db-init:
-	@mkdir -p data
-	@sqlite3 $(DB) < template/data/schema.sql
+grant: $(BIN) ## 签发临时凭证（id/title 可选，ttl=秒）
+	@$(BIN) grant
 
-db: db-init ## 打开 SQLite 交互式查询
-	sqlite3 $(DB)
+use: $(BIN) ## 用临时凭证执行（token=... cmd='命令'，变量中的 $ 写成 $$）
+	@$(BIN) use
 
-show: db-init ## 打印某身份的全部信息（id=gene）
-	@iv="$(id)"; [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	[ -n "$$iv" ] || { printf '$(ER)错误: 身份不能为空$(N)\n' >&2; exit 1; }; \
-	printf '$(H)== %s 的条目 ==$(N)\n' "$$iv"; \
-	sqlite3 -header -column $(DB) "SELECT category AS '分类', key AS '名称', value AS '内容', note AS '备注', updated_at AS '更新时间' FROM items WHERE identity='$$iv' ORDER BY category, key;"; \
-	echo; printf '$(H)== %s 的事件 ==$(N)\n' "$$iv"; \
-	sqlite3 -header -column $(DB) "SELECT happened_at AS '时间', title AS '标题', detail AS '详情' FROM events WHERE identity='$$iv' ORDER BY happened_at DESC;"
+grants: $(BIN) ## 列出活跃临时凭证
+	@$(BIN) grants
 
-item: db-init ## 写/改条目（id=gene，缺省逐个询问；值里别用单引号）
-	@iv="$(id)";     [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	cv="$(cat)";    [ -n "$$cv" ] || read -p "$$(printf '$(PR)分类(account 为账号，其他可自定义，如 work/address/preference): $(N)')" cv; \
-	kv="$(key)";    [ -n "$$kv" ] || read -p "$$(printf '$(PR)名称: $(N)')" kv; \
-	vv="$(value)";  [ -n "$$vv" ] || read -p "$$(printf '$(PR)内容: $(N)')" vv; \
-	nv="$(note)";   [ -n "$$nv" ] || read -p "$$(printf '$(PR)备注(可空): $(N)')" nv; \
-	[ -n "$$iv" -a -n "$$cv" -a -n "$$kv" -a -n "$$vv" ] || { printf '$(ER)错误: 身份/分类/名称/内容不能为空$(N)\n' >&2; exit 1; }; \
-	sqlite3 $(DB) "INSERT INTO items(identity,category,key,value,note) VALUES('$$iv','$$cv','$$kv','$$vv','$$nv') ON CONFLICT(identity,category,key) DO UPDATE SET value=excluded.value, note=excluded.note, updated_at=datetime('now');" && \
-	printf '$(OK)✓ 已写入 %s/%s$(N)\n' "$$iv" "$$kv"
+revoke: $(BIN) ## 撤销凭证（token=... 或 all=1）
+	@$(BIN) revoke $(if $(filter 1,$(all)),--all,)
 
-event: db-init ## 记事件（id=gene，缺省逐个询问；值里别用单引号）
-	@iv="$(id)";     [ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	tv="$(title)";  [ -n "$$tv" ] || read -p "$$(printf '$(PR)标题: $(N)')" tv; \
-	dv="$(detail)"; [ -n "$$dv" ] || read -p "$$(printf '$(PR)详情(可空): $(N)')" dv; \
-	[ -n "$$iv" -a -n "$$tv" ] || { printf '$(ER)错误: 身份和标题不能为空$(N)\n' >&2; exit 1; }; \
-	sqlite3 $(DB) "INSERT INTO events(identity,title,detail) VALUES('$$iv','$$tv','$$dv');" && \
-	printf '$(OK)✓ 已记录: %s$(N)\n' "$$tv"
+##@ 开发
 
-ai: ## AI 整理资料（↑/↓选身份；空行提交；结果后可执行命令或继续提问；设置见 config/config.toml）
-	@iv="$(id)"; fv="$(file)"; \
-	[ -n "$$iv" ] || iv="$$(scripts/select-identity.sh)"; \
-	[ -n "$$iv" ] || { printf '$(ER)错误: 身份不能为空$(N)\n' >&2; exit 1; }; \
-	if [ -n "$$fv" ]; then scripts/ai-organize.py --identity "$$iv" "$$fv"; \
-	else scripts/ai-organize.py --identity "$$iv"; fi
+build: $(BIN) ## 编译 Rust CLI
 
-status: db-init ## 总览：身份列表、各身份条目数、Web 运行状态
-	@printf '$(H)== 身份 ==$(N)\n'; ls identities/
-	@echo; printf '$(H)== 条目数 ==$(N)\n'; sqlite3 $(DB) "SELECT identity, COUNT(*) FROM items GROUP BY identity;"
-	@echo; printf '$(H)== Web ==$(N)\n'; $(COMPOSE) ps 2>/dev/null || true
+test: ## 运行单元测试和终端集成测试
+	$(require_cargo)
+	@"$(CARGO)" test --locked
+	@"$(CARGO)" build --locked
+	@python3 -m unittest discover -s tests -v
 
-backup: ## 备份 SQLite 库到 backups/
-	@mkdir -p backups
-	cp $(DB) backups/id-$$(date +%Y%m%d-%H%M%S).db
-	@printf '$(OK)✓ 已备份:$(N)\n'; ls -t backups/ | head -3
+check: $(BIN) ## 检查追踪范围、忽略规则、权限和疑似机密
+	@$(BIN) check
