@@ -3,6 +3,7 @@ mod ai_view;
 pub mod browser;
 pub mod clipboard;
 pub mod config;
+pub mod doctor;
 mod file_picker;
 pub mod grants;
 pub mod identity;

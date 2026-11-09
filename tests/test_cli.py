@@ -185,6 +185,38 @@ class CliTests(unittest.TestCase):
         secret=root/'config/secrets/.secrets.env';secret.write_text('SYNCTHING_API_KEY=synthetic-sync-key\n');secret.chmod(0o600)
         return state
 
+    def test_doctor_is_read_only_and_archives_only_after_confirmation(self):
+        shutil.copyfile(ROOT/'.stignore', self.root/'.stignore')
+        vault=self.root/'identities/alice/passwords/alice.kdbx'
+        original=vault.read_bytes()
+        conflict=vault.with_name('alice.sync-conflict-private-filename.kdbx')
+        conflict.write_bytes(original)
+        self.assertIn('同步冲突副本', self.run_cli('doctor','--id','alice',code=1).stdout)
+        self.assertTrue(conflict.exists())
+        self.assertIn('目录异常',self.run_cli('status').stdout)
+        t=Terminal(self,['doctor','--id','alice','--fix'])
+        t.expect('归档全部 1 个副本');t.send(ENTER);t.finish(130)
+        self.assertTrue(conflict.exists())
+        t=Terminal(self,[],command=['make','-C',str(ROOT),'--no-print-directory','doctor','id=alice','fix=1'],env={'ID_ROOT':str(self.root)})
+        t.expect('归档全部 1 个副本');t.send(DOWN+ENTER);t.expect('已归档');t.finish()
+        self.assertFalse(conflict.exists())
+        self.assertEqual(vault.read_bytes(),original)
+        archived=list((self.root/'backups/identity-cleanup').glob('alice-*/*.kdbx'))
+        self.assertEqual(len(archived),1)
+        self.assertEqual(archived[0].read_bytes(),original)
+        self.assertEqual(archived[0].stat().st_mode&0o777,0o600)
+        self.assertIn('目录正常',self.run_cli('doctor','--id','alice').stdout)
+        self.assertNotIn('目录异常',self.run_cli('status').stdout)
+
+    def test_write_guard_works_even_when_syncthing_handoff_is_disabled(self):
+        vault=self.root/'identities/alice/passwords/alice.kdbx';original=vault.read_bytes()
+        conflict=vault.with_name('alice.sync-conflict-test.kdbx');conflict.write_bytes(original)
+        t=Terminal(self,['item','--id','alice','--cat','work','--key','职位','--value','Engineer','--note',''])
+        t.expect('同步冲突副本');output=t.finish(1)
+        self.assertNotIn('主密码:'.encode(),output)
+        self.assertEqual(vault.read_bytes(),original)
+        self.assertEqual(conflict.read_bytes(),original)
+
     def test_syncthing_waits_for_full_nas_version_before_unlock_and_after_save(self):
         state=self.sync_server();state.update(ready=False,block_exit=True)
         t=Terminal(self,['item','--id','alice','--cat','work','--key','职位','--value','Engineer','--note',''])
@@ -894,6 +926,40 @@ class CliTests(unittest.TestCase):
         secret.chmod(0o600)
         (self.root / "config/config.toml").write_text(f'[ai]\nbase_url="http://127.0.0.1:{server.server_port}/v1"\nmodel="fixture-model"\n')
         return requests
+
+    def test_ai_diagnoses_without_disclosing_filenames_and_repairs_with_local_confirmation(self):
+        shutil.copyfile(ROOT/'.stignore',self.root/'.stignore')
+        vault=self.root/'identities/alice/passwords/alice.kdbx';original=vault.read_bytes()
+        conflict=vault.with_name('alice.sync-conflict-PRIVATE-FILENAME.kdbx');conflict.write_bytes(original)
+        bob=self.root/'identities/bob/passwords/bob.kdbx';bob_before=bob.read_bytes()
+        tool={'role':'assistant','content':None,'tool_calls':[{'id':'doctor-1','type':'function','function':{'name':'doctor','arguments':'{}'}}]}
+        draft={'reply':'发现冲突副本，可在本地确认归档。','actions':[{'identity':'alice','action':'directory-repair'}]}
+        requests=self.ai_server([(200,{'choices':[{'message':tool}]}),(200,{'choices':[{'message':{'content':json.dumps(draft)}}]})])
+        t=Terminal(self,['ai','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r')
+        t.expect('空行提交');t.send('检查并整理身份目录\r\r');t.expect('检查并归档异常副本')
+        self.assertTrue(conflict.exists())
+        tool_result=next(m for m in requests[1]['messages'] if m['role']=='tool')
+        data=json.loads(tool_result['content']);self.assertEqual(data['issues']['同步冲突副本'],1)
+        self.assertNotIn('PRIVATE-FILENAME',tool_result['content'])
+        self.assertNotIn('identities/',tool_result['content'])
+        t.send(ENTER);t.expect('归档全部 1 个副本');t.send(DOWN+ENTER);t.expect('操作完成')
+        t.expect('空行提交');t.send('/doctor\r\r');t.expect('identities 目录正常')
+        t.send('/quit\r\r');output=t.finish()
+        self.assertEqual(len(requests),2)
+        self.assertFalse(conflict.exists());self.assertEqual(vault.read_bytes(),original)
+        self.assertEqual(bob.read_bytes(),bob_before)
+        self.assertEqual(len(list((self.root/'backups/identity-cleanup').glob('alice-*/*.kdbx'))),1)
+        self.assertNotIn(MASTER,json.dumps(requests));self.assertNotIn(PASSWORD.encode(),output)
+
+    def test_ai_doctor_refuses_model_supplied_paths_and_other_identities(self):
+        tool={'role':'assistant','content':None,'tool_calls':[{'id':'doctor-1','type':'function','function':{'name':'doctor','arguments':json.dumps({'id':'bob','path':'../outside'})}}]}
+        draft={'reply':'请在本地核对目录。'}
+        requests=self.ai_server([(200,{'choices':[{'message':tool}]}),(200,{'choices':[{'message':{'content':json.dumps(draft)}}]})])
+        t=Terminal(self,['ai','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r')
+        t.expect('空行提交');t.send('检查目录\r\r');t.expect('下一步');t.send('q');t.finish()
+        data=json.loads(next(m for m in requests[1]['messages'] if m['role']=='tool')['content'])
+        self.assertIn('不接受身份、路径',data['error'])
+        self.assertFalse((self.root/'backups').exists())
 
     def test_ai_http_errors_are_actionable_and_never_echo_provider_body(self):
         cases = [

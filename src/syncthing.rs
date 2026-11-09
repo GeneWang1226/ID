@@ -169,15 +169,7 @@ impl Handoff {
         Ok(())
     }
     fn conflicts(&self) -> Result<()> {
-        let stem = self.vault.file_stem().unwrap().to_string_lossy();
-        for item in fs::read_dir(self.vault.parent().unwrap())? {
-            let name = item?.file_name().to_string_lossy().into_owned();
-            ensure!(
-                !(name.starts_with(&format!("{stem}.sync-conflict-")) && name.ends_with(".kdbx")),
-                "存在此身份的同步冲突副本，请在 KeePassXC 合并并核对后继续；所有文件均保留"
-            );
-        }
-        Ok(())
+        crate::doctor::ensure_no_conflicts(&self.vault)
     }
     fn ready(&self) -> Result<bool> {
         self.conflicts()?;

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use id_manager::{
-    Project, ai, browser, clipboard, config, grants, identity, import, maintenance,
+    Project, ai, browser, clipboard, config, doctor, grants, identity, import, maintenance,
     store::{self, Store},
     syncthing, ui,
     vault::Session,
@@ -116,6 +116,13 @@ enum Commands {
     Backup,
     /// 各身份密码库状态
     Status,
+    /// 检查身份目录；--fix 经确认后归档冲突库和遗留加密备份
+    Doctor {
+        #[command(flatten)]
+        identity: Identity,
+        #[arg(long, env = "ID_DOCTOR_FIX", value_parser = clap::builder::BoolishValueParser::new())]
+        fix: bool,
+    },
     /// 安全检查
     Check,
     /// 导入账号表，保存到各身份 KDBX
@@ -322,7 +329,19 @@ fn execute(cli: Cli, handoff: &mut Option<syncthing::Handoff>) -> Result<()> {
                     }
                 );
             }
+            let report = doctor::scan(&project, None)?;
+            if !report.is_clean() {
+                println!(
+                    "目录异常：{} 项，运行 make doctor 查看。",
+                    report.issue_count()
+                );
+            }
         }
+        Commands::Doctor { identity, fix } => doctor::run(
+            &project,
+            identity.id.as_deref().filter(|s| !s.is_empty()),
+            fix,
+        )?,
         Commands::Check => id_manager::security::check(&project)?,
         Commands::Import { file, owners } => import::accounts(&project, &file, &owners, &session)?,
         Commands::Grant { entry, ttl } => {

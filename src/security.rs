@@ -37,6 +37,12 @@ fn permission(path: &Path, expected: u32) -> Result<()> {
     Ok(())
 }
 pub fn check(project: &Project) -> Result<()> {
+    let report = crate::doctor::scan(project, None)?;
+    ensure!(
+        report.is_clean(),
+        "身份目录存在 {} 项异常，请运行 make doctor 查看",
+        report.issue_count()
+    );
     rules(&project.root.join(".gitignore"))?;
     let sync = rules(&project.root.join(".stignore"))?;
     for rule in [

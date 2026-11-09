@@ -25,6 +25,9 @@ endif
 ifneq ($(origin generate),undefined)
 export ID_PASS_GENERATE = $(value generate)
 endif
+ifneq ($(origin fix),undefined)
+export ID_DOCTOR_FIX = $(value fix)
+endif
 ifneq ($(origin user),undefined)
 export ID_ENTRY_USER = $(value user)
 endif
@@ -64,7 +67,7 @@ endif
 manage: export ID_LIST_TYPE = $(if $(value type),$(value type),all)
 manage: export ID_LIST_CATEGORY = $(value cat)
 
-.PHONY: help build test check settings clipboard-check new remove passwd pass pass-set manage grant use grants revoke tag item event ai status backup organize
+.PHONY: help build test check settings clipboard-check new remove passwd pass pass-set manage grant use grants revoke tag item event ai status backup organize doctor
 
 help:
 	@awk 'BEGIN {FS = ":.*## "; print "使用：make <命令> [id=身份]"} /^##@ / {printf "\n%s\n", substr($$0, 5)} /^[a-z-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' Makefile
@@ -105,6 +108,9 @@ status: $(BIN) ## 查看所有身份密码库状态
 	@$(BIN) status
 
 ##@ 维护
+
+doctor: $(BIN) ## 检查 identities 异常；id=身份，fix=1 确认后归档加密副本
+	@$(BIN) doctor
 
 backup: $(BIN) ## 备份各身份加密密码库到 backups/vaults/
 	@$(BIN) backup

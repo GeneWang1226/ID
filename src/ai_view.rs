@@ -20,7 +20,7 @@ impl ChatView {
         Self {
             identity: identity.into(),
             notice: String::new(),
-            transcript: vec![("说出要整理的资料，或请求保存账号、查看密码。".into(), "2")],
+            transcript: vec![("说出要整理的资料，或请求保存账号、查看密码。\n目录维护：/doctor 检查 · /repair 归档异常副本".into(), "2")],
             details: String::new(),
             show_details: false,
             offset: 0,

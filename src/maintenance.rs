@@ -13,6 +13,7 @@ pub fn new_identity(project: &Project, name: &str) -> Result<()> {
     );
     let vault = identity::path(project, name)?;
     let password = if !vault.exists() {
+        crate::doctor::ensure_no_conflicts(&vault)?;
         let first = ui::secret("设置主密码: ")?;
         let second = ui::secret("再次输入主密码: ")?;
         ensure!(

@@ -59,6 +59,8 @@ make pass-set id=example         # 在本地录入或修改密码
 make ai id=example               # 全屏 AI 助手
 make organize id=example         # 旧项目条目归入原生群组
 make backup                     # 备份各身份加密密码库
+make doctor                     # 只读检查身份目录异常
+make doctor id=example fix=1     # 本地确认后归档冲突副本、遗留备份
 make remove id=example          # 确认、验证后移除，原文件保留在本机归档
 make help
 ```
@@ -70,6 +72,8 @@ TUI 中 Enter 展开详情，`c` 取用字段，`o` 操作，`n` 新增，`l` �
 `make help` 按日常使用、身份管理、维护、自动化与授权、开发分组。密码录入统一用 `pass-set`，加 `generate=1` 生成强密码；`pass` 默认复制，加 `show=1` 明文查看（须设置允许）。重复的列表和密码命令已移除，替代关系见 [使用说明](docs/GUIDE.md#命令整理)。
 
 AI 查询仅提供当前身份的普通资料及密码是否已填，不提供密码和受保护字段；本地密码操作不经过模型。AI 外部服务按需配置 API key，正常资料管理无需网络。不要把密码、主密码或恢复码输入聊天。
+
+AI 可用只读 `doctor` 工具诊断当前身份目录，只向模型提供异常类别和数量；修复操作由本地界面列出实际文件并确认。也可直接输入 `/doctor` 检查、`/repair` 归档，无需调用模型。冲突副本和遗留加密备份移入 `backups/identity-cleanup/`，正式库保留；临时文件、锁、空库、链接和未知资料仅提示，不自动删除。发现同步冲突时，CLI 写入会中止，即使未开启同步交接检查。
 
 ## 安全与平台范围
 

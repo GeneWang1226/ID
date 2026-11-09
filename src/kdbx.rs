@@ -1143,6 +1143,7 @@ impl Document {
             fingerprint(&vault)? == self.fingerprint,
             "密码库已被同步修改，请刷新后重试"
         );
+        crate::doctor::ensure_no_conflicts(&vault)?;
         staged
             .persist(&vault)
             .map_err(|_| anyhow::anyhow!("保存失败，原库和加密备份已保留"))?;
@@ -1162,6 +1163,11 @@ pub(crate) struct WriteLock {
 }
 impl WriteLock {
     pub fn acquire(project: &Project, identity: &str) -> Result<Self> {
+        let lock = Self::for_repair(project, identity)?;
+        crate::doctor::ensure_no_conflicts(&identity::vault(project, identity)?)?;
+        Ok(lock)
+    }
+    pub(crate) fn for_repair(project: &Project, identity: &str) -> Result<Self> {
         identity::vault(project, identity)?;
         let folder = project.root.join("config/.cache/vault-locks");
         project.contained(&folder)?;

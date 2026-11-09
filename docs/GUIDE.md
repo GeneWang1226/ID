@@ -100,6 +100,8 @@ AI 代用密码仍通过 `make grant` / `make use` 临时授权，凭据不放�
 
 Debian 和 NAS 各自运行 Syncthing 时，用 `make settings` →“Syncthing 同步交接”配置本机接口与 API key，选择同步文件夹和 NAS，开启后保存。之后打开身份前自动等待同步，修改后退出时等待 NAS 收到完整更新；看到“可以切换设备”再去另一端打开。NFS/SMB 仍可用来查看 NAS。超时、离线或冲突会明确提示，不会自动忽略；详见[维护文档](MAINTENANCE.md#syncthing)。
 
+目录有异常时运行 `make doctor`，加 `id=example` 只检查该身份。加 `fix=1` 后在本地选择归档冲突副本或遗留加密备份，正式库保持原样；临时文件、锁和未知资料保留。AI 中也可以直接输入 `/doctor`、`/repair`，或请求 AI 检查、整理目录。归档不等于合并冲突，详见[目录维护](MAINTENANCE.md#目录检查与异常处理)。
+
 ## 命令写入普通资料
 
 ```sh
