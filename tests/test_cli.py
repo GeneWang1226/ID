@@ -145,6 +145,95 @@ class CliTests(unittest.TestCase):
     def values(self, entry):
         return {s.findtext("Key"):s.findtext("Value","") for s in entry.findall("String")}
 
+    def sync_server(self):
+        from urllib.parse import urlsplit, parse_qs
+        state={'ready':True,'connected':True,'block_exit':False,'release':False,'scans':0,'requests':[],'status':200}
+        root=self.root
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(self):self.respond()
+            def do_GET(self):self.respond()
+            def respond(self):
+                parsed=urlsplit(self.path);query=parse_qs(parsed.query)
+                body=self.rfile.read(int(self.headers.get('Content-Length','0')))
+                state['requests'].append((self.command,parsed.path,query,body))
+                if self.headers.get('X-API-Key')!='synthetic-sync-key':
+                    self.send_response(401);self.end_headers();return
+                path=parsed.path
+                if path.endswith('/config/folders'):
+                    value=[{'id':'id-folder','label':'ID','path':str(root),'type':'sendreceive','paused':False,'devices':[{'deviceID':'NAS'}]}]
+                elif path.endswith('/config/devices'):value=[{'deviceID':'LOCAL','name':'Debian'},{'deviceID':'NAS','name':'My NAS'}]
+                elif path.endswith('/system/status'):value={'myID':'LOCAL'}
+                elif path.endswith('/system/connections'):value={'connections':{'NAS':{'connected':state['connected'],'paused':False}}}
+                elif path.endswith('/db/scan'):state['scans']+=1;value={}
+                elif path.endswith('/db/status'):value={'state':'idle','needTotalItems':0,'pullErrors':0}
+                elif path.endswith('/db/completion'):value={'completion':100,'needItems':0,'needBytes':0,'needDeletes':0,'remoteState':'valid'}
+                elif path.endswith('/db/file'):
+                    file=root/query['file'][0]
+                    entry={'size':file.stat().st_size,'version':['LOCAL:'+str(state['scans'])],'deleted':False,'invalid':False}
+                    temporary=not state['ready'] or state['block_exit'] and state['scans']>1 and not state['release']
+                    value={'local':entry,'global':entry,'availability':[{'id':'NAS','fromTemporary':temporary}]}
+                else:raise AssertionError(path)
+                self.send_response(state['status']);self.end_headers()
+                try:self.wfile.write(json.dumps(value if state['status']==200 else {'echo':'synthetic-sync-key SERVER-PRIVATE-ERROR'}).encode())
+                except BrokenPipeError:pass
+        server=HTTPServer(('127.0.0.1',0),Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        with (root/'config/config.toml').open('a') as f:
+            f.write(f'\n[syncthing]\nenabled=true\napi_url="http://127.0.0.1:{server.server_port}"\nfolder_id="id-folder"\npeer_device="NAS"\ntimeout_seconds=1\n')
+        secret=root/'config/secrets/.secrets.env';secret.write_text('SYNCTHING_API_KEY=synthetic-sync-key\n');secret.chmod(0o600)
+        return state
+
+    def test_syncthing_waits_for_full_nas_version_before_unlock_and_after_save(self):
+        state=self.sync_server();state.update(ready=False,block_exit=True)
+        t=Terminal(self,['item','--id','alice','--cat','work','--key','职位','--value','Engineer','--note',''])
+        t.expect('等待同步 ·');self.assertNotIn('主密码:'.encode(),t.output)
+        state['ready']=True;t.expect('主密码:');t.send(MASTER+'\r');t.expect('已保存')
+        t.expect('退出前：');self.assertNotIn('可以切换设备'.encode(),t.output)
+        state['release']=True;t.expect('可以切换设备');output=t.finish()
+        self.assertEqual(self.values(self.entries()[0])['职位'],'Engineer')
+        self.assertGreaterEqual(state['scans'],2)
+        self.assertTrue(any(p=='/rest/db/file' and q['file']==['identities/alice/passwords/alice.kdbx'] for _,p,q,_ in state['requests']))
+        self.assertTrue(all(not body for *_,body in state['requests']))
+        self.assertNotIn(b'synthetic-sync-key',output)
+        self.assertNotIn(PASSWORD.encode(),output)
+
+    def test_syncthing_failure_and_conflicts_never_unlock_or_claim_success(self):
+        state=self.sync_server();state['connected']=False
+        vault=self.root/'identities/alice/passwords/alice.kdbx';original=vault.read_bytes()
+        for command in ['manage','ai']:
+            t=Terminal(self,[command,'--id','alice']);t.expect('交接设备未连接');t.send('q');output=t.finish(1)
+            self.assertNotIn('主密码:'.encode(),output);self.assertNotIn('可以切换设备'.encode(),output)
+        state.update(connected=True,status=403)
+        t=Terminal(self,['manage','--id','alice']);t.expect('HTTP 403');output=t.finish(1)
+        self.assertNotIn(b'synthetic-sync-key',output);self.assertNotIn(b'SERVER-PRIVATE-ERROR',output)
+        state['status']=200
+        conflict=vault.with_name('alice.sync-conflict-synthetic.kdbx');conflict.write_bytes(original)
+        t=Terminal(self,['manage','--id','alice']);t.expect('同步冲突副本');t.send('q');output=t.finish(1)
+        self.assertNotIn('主密码:'.encode(),output)
+        self.assertEqual(vault.read_bytes(),original);self.assertEqual(conflict.read_bytes(),original)
+
+    def test_syncthing_exit_timeout_keeps_saved_data_without_claiming_handoff(self):
+        state=self.sync_server();state['block_exit']=True
+        t=Terminal(self,['item','--id','alice','--cat','work','--key','职位','--value','Engineer','--note',''])
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('等待同步超时');t.send('q');output=t.finish(1)
+        self.assertNotIn('可以切换设备'.encode(),output)
+        self.assertEqual(self.values(self.entries()[0])['职位'],'Engineer')
+
+    def test_syncthing_settings_choose_folder_peer_and_keep_key_private(self):
+        self.sync_server()
+        secret=self.root/'config/secrets/.secrets.env';secret.unlink()
+        t=Terminal(self,['settings']);t.expect('ID 设置');t.send(DOWN*7+ENTER)
+        t.expect('连接当前设备');t.send(DOWN*2+ENTER);t.expect('Syncthing API key（Enter 保留）:')
+        t.send('synthetic-sync-key\r');t.expect('已设置');t.send(DOWN+ENTER)
+        t.expect('选择包含 identities');t.send(ENTER);t.expect('连接当前设备');t.send(DOWN+ENTER)
+        t.expect('选择交接设备');t.expect('My NAS');t.send(ENTER);t.expect('连接当前设备');t.send('q')
+        t.expect('ID 设置');t.send(b'\x1b[A'+ENTER);t.expect('设置已保存');output=t.finish()
+        self.assertNotIn(b'synthetic-sync-key',output)
+        self.assertEqual(secret.stat().st_mode&0o777,0o600)
+        self.assertIn('SYNCTHING_API_KEY=synthetic-sync-key',secret.read_text())
+
 
     def test_settings_arrows_toggle_and_cancel_restore_terminal(self):
         t = Terminal(self, ["settings"])
@@ -661,6 +750,62 @@ class CliTests(unittest.TestCase):
         self.assertNotIn(MASTER, json.dumps(requests))
         self.assertNotIn(PASSWORD.encode(), output)
         self.assertEqual(self.entries(), [])
+
+    def test_ai_recovery_codes_use_existing_account_field_and_never_reach_model(self):
+        self.add('Cloudflare')
+        original=self.entries()[0].findtext('UUID')
+        legacy={'reply':'请在本地录入','secrets':[{'title':'Cloudflare 双因素身份验证恢复代码','kind':'密码','field':'Password','action':'save'}]}
+        response=lambda draft:(200,{'choices':[{'message':{'content':json.dumps(draft)}}]})
+        requests=self.ai_server([response(legacy),response({'reply':'继续使用本地资料库'})])
+        t=Terminal(self,['ai','--id','alice']);t.expect('主密码:');t.send(MASTER+'\r');t.expect('空行提交')
+        t.send('保存双因素身份验证恢复代码\r\r')
+        t.expect("make pass-set id='alice' title='Cloudflare' field='恢复码'")
+        t.expect('录入恢复码 Cloudflare');t.send(ENTER)
+        t.expect('再次验证主密码:');t.assert_fullscreen_active();t.send(MASTER+'\r')
+        t.expect('可粘贴多行');t.send(b'\x1b[200~00001234\r\nSYNTHETIC-RECOVERY-END\x1b[201~')
+        t.send(ENTER);t.expect('操作完成：录入恢复码 Cloudflare');t.expect('空行提交')
+        t.send('有哪些账号\r\r');t.expect('下一步');t.send('q');output=t.finish()
+        self.assertEqual(len(requests),2)
+        for value in [MASTER,PASSWORD,'00001234','SYNTHETIC-RECOVERY-END']:
+            self.assertNotIn(value,json.dumps(requests));self.assertNotIn(value.encode(),output)
+        entries=self.entries();self.assertEqual(len(entries),1)
+        entry=entries[0];self.assertEqual(entry.findtext('UUID'),original)
+        self.assertEqual(self.values(entry)['恢复码'],'00001234\nSYNTHETIC-RECOVERY-END')
+        self.assertEqual(self.values(entry)['Password'],PASSWORD)
+        field=next(s.find('Value') for s in entry.findall('String') if s.findtext('Key')=='恢复码')
+        self.assertEqual(field.attrib.get('ProtectInMemory'),'True')
+        self.assertEqual(output.count(b'\x1b[?1049h'),1);self.assertEqual(output.count(b'\x1b[?1049l'),1)
+        self.assertIn(b'\x1b[?2004h',output);self.assertIn(b'\x1b[?2004l',output)
+
+    def test_secret_field_cli_selects_existing_account_and_cancels_without_changes(self):
+        self.add('Cloudflare')
+        bob=(self.root/'identities/bob/passwords/bob.kdbx').read_bytes()
+        t=Terminal(self,[],env={'ID_ROOT':str(self.root)},command=['make','--no-print-directory','pass-set','id=alice','field=恢复码'])
+        t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('选择字段所属账号');t.send(ENTER)
+        t.expect('可粘贴多行');t.send(b'\x1b[200~00005555\nSYNTHETIC-CLI-RECOVERY\x1b[201~'+ENTER)
+        t.expect('字段已保存');output=t.finish()
+        self.assertNotIn(b'SYNTHETIC-CLI-RECOVERY',output)
+        self.assertEqual(self.values(self.entries()[0])['恢复码'],'00005555\nSYNTHETIC-CLI-RECOVERY')
+        self.assertEqual(self.values(self.entries()[0])['Password'],PASSWORD)
+        vault=self.root/'identities/alice/passwords/alice.kdbx';before=vault.read_bytes()
+        args=['pass-set','--id','alice','--title','Cloudflare','--field','恢复码']
+        t=Terminal(self,args);t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('替换已有');t.send(ENTER)
+        t.finish(130);self.assertEqual(vault.read_bytes(),before)
+        t=Terminal(self,args);t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('替换已有');t.send(DOWN+ENTER)
+        t.expect('可粘贴多行');t.send(b'\x1b');output=t.finish(130)
+        self.assertIn(b'\x1b[?2004l',output);self.assertEqual(vault.read_bytes(),before)
+        t=Terminal(self,args);t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('替换已有');t.send(DOWN+ENTER)
+        t.expect('可粘贴多行');t.send(ENTER);t.expect('内容为空');t.finish(1)
+        self.assertEqual(vault.read_bytes(),before)
+        t=Terminal(self,args[:4]+['Missing','--field','恢复码']);t.expect('再次验证主密码:');t.send(MASTER+'\r')
+        t.expect('条目不存在，未新建');t.finish(1);self.assertEqual(vault.read_bytes(),before)
+        t=Terminal(self,args);t.expect('再次验证主密码:');t.send(MASTER+'\r');t.expect('替换已有');t.send(DOWN+ENTER)
+        t.expect('可粘贴多行');self.keepass('alice','edit',['Cloudflare','--notes','Synthetic concurrent update'])
+        t.send('SYNTHETIC-UNSAVED-FIELD\r');t.expect('已有新版本');output=t.finish(1)
+        self.assertNotIn(b'SYNTHETIC-UNSAVED-FIELD',output)
+        self.assertEqual(self.values(self.entries()[0])['恢复码'],'00005555\nSYNTHETIC-CLI-RECOVERY')
+        self.assertEqual(len(self.entries()),1)
+        self.assertEqual((self.root/'identities/bob/passwords/bob.kdbx').read_bytes(),bob)
 
     def set_tags(self, title, tags):
         t = Terminal(self, ["tag", "--id", "alice", "--title", title, "--tags", tags])
@@ -1276,10 +1421,15 @@ class CliTests(unittest.TestCase):
         self.keepass('alice','mkdir',['Accounts'])
         self.add('Accounts/GitHub')
         initial=self.entries_in_group('Accounts')[0].findtext('UUID')
-        self.item(key='github',category='account',value='updated-user')
+        vault=self.root/'identities/alice/passwords/alice.kdbx';before=vault.read_bytes()
+        t=Terminal(self,['item','--id','alice','--cat','account','--key','github','--value','updated-user','--note',''])
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('已有同名账号');t.finish(1)
+        self.assertEqual(vault.read_bytes(),before)
+        self.item(key='github',category='account',value='tester',note='Updated account note')
         grouped=self.entries_in_group('Accounts');self.assertEqual(len(grouped),1)
         self.assertEqual(grouped[0].findtext('UUID'),initial)
-        self.assertEqual(self.values(grouped[0])['UserName'],'updated-user')
+        self.assertEqual(self.values(grouped[0])['UserName'],'tester')
+        self.assertEqual(self.values(grouped[0])['Notes'],'Updated account note')
         self.assertEqual(self.values(grouped[0])['Password'],PASSWORD)
         self.assertEqual(len(self.entries()),1)
 

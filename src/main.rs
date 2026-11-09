@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 use id_manager::{
     Project, ai, browser, clipboard, config, grants, identity, import, maintenance,
     store::{self, Store},
-    ui,
+    syncthing, ui,
     vault::Session,
 };
 use std::path::PathBuf;
@@ -65,10 +65,12 @@ enum Commands {
         #[arg(long, env = "ID_PASS_SHOW", value_parser = clap::builder::BoolishValueParser::new())]
         show: bool,
     },
-    /// 新增或修改密码；--generate 生成强密码
+    /// 新增或修改密码，或录入已有条目的受保护字段
     PassSet {
         #[command(flatten)]
         entry: Entry,
+        #[arg(long, env = "ID_ENTRY_FIELD", default_value = "Password")]
+        field: String,
         #[arg(long, env = "ID_PASS_GENERATE", value_parser = clap::builder::BoolishValueParser::new())]
         generate: bool,
     },
@@ -165,12 +167,17 @@ fn optional(value: Option<String>, prompt: &str) -> Result<String> {
         None => ui::input(prompt),
     }
 }
-fn role(project: &Project, args: Identity) -> Result<String> {
-    identity::select(project, args.id.as_deref())
+fn role(
+    project: &Project,
+    args: Identity,
+    handoff: &mut Option<syncthing::Handoff>,
+) -> Result<String> {
+    let id = identity::select(project, args.id.as_deref())?;
+    *handoff = syncthing::Handoff::begin(project, &id)?;
+    Ok(id)
 }
 
-fn run() -> Result<()> {
-    let cli = Cli::parse();
+fn execute(cli: Cli, handoff: &mut Option<syncthing::Handoff>) -> Result<()> {
     let project = Project::open(&cli.root)?;
     let session = Session::default();
     match cli.command {
@@ -180,7 +187,7 @@ fn run() -> Result<()> {
         }
         Commands::Remove { identity } => {
             let terminal = ui::Terminal::new(true)?;
-            let id = role(&project, identity)?;
+            let id = identity::select(&project, identity.id.as_deref())?;
             let archive = maintenance::remove_identity(&project, &id, &session)?;
             drop(terminal);
             if let Some(path) = archive {
@@ -198,11 +205,11 @@ fn run() -> Result<()> {
             category,
         } => {
             let _terminal = ui::Terminal::new(true)?;
-            let id = role(&project, identity)?;
+            let id = role(&project, identity, handoff)?;
             browser::manage(&project, &id, view, category, &session)?;
         }
         Commands::Pass { entry, field, show } => {
-            let id = role(&project, entry.identity)?;
+            let id = role(&project, entry.identity, handoff)?;
             clipboard::pass(
                 &project,
                 &id,
@@ -212,19 +219,31 @@ fn run() -> Result<()> {
                 &session,
             )?;
         }
-        Commands::PassSet { entry, generate } => {
-            let id = role(&project, entry.identity)?;
-            import::fill(
-                &project,
-                &id,
-                entry.title.as_deref(),
-                entry.user.as_deref(),
-                generate,
-                &session,
-            )?;
+        Commands::PassSet {
+            entry,
+            field,
+            generate,
+        } => {
+            let id = role(&project, entry.identity, handoff)?;
+            if field == "Password" {
+                import::fill(
+                    &project,
+                    &id,
+                    entry.title.as_deref(),
+                    entry.user.as_deref(),
+                    generate,
+                    &session,
+                )?;
+            } else {
+                anyhow::ensure!(
+                    !generate && entry.user.is_none(),
+                    "字段录入不支持 generate 或 user"
+                );
+                store::write_secret_field(&project, &id, entry.title.as_deref(), &field, &session)?;
+            }
         }
         Commands::Passwd { identity } => {
-            let id = role(&project, identity)?;
+            let id = role(&project, identity, handoff)?;
             let vault = identity::vault(&project, &id)?;
             session.unlock(&vault, true)?;
             let first = ui::secret("新主密码: ")?;
@@ -250,7 +269,7 @@ fn run() -> Result<()> {
         }
         Commands::Ai { identity, file } => {
             let _terminal = ui::Terminal::new(true)?;
-            let id = role(&project, identity)?;
+            let id = role(&project, identity, handoff)?;
             ai::chat(&project, &id, file.as_deref(), &session)?;
         }
         Commands::Item {
@@ -260,7 +279,7 @@ fn run() -> Result<()> {
             value,
             note,
         } => {
-            let id = role(&project, identity)?;
+            let id = role(&project, identity, handoff)?;
             let cat = ask(cat, "分类: ")?;
             let key = ask(key, "名称: ")?;
             let value = ask(value, "内容: ")?;
@@ -273,7 +292,7 @@ fn run() -> Result<()> {
             title,
             detail,
         } => {
-            let id = role(&project, identity)?;
+            let id = role(&project, identity, handoff)?;
             Store::open(&project, &id, &session)?.event(
                 &id,
                 &ask(title, "事件标题: ")?,
@@ -282,7 +301,7 @@ fn run() -> Result<()> {
             println!("已记录。");
         }
         Commands::Organize { identity } => {
-            let id = role(&project, identity)?;
+            let id = role(&project, identity, handoff)?;
             Store::open(&project, &id, &session)?.organize()?;
         }
         Commands::Backup => {
@@ -307,7 +326,7 @@ fn run() -> Result<()> {
         Commands::Check => id_manager::security::check(&project)?,
         Commands::Import { file, owners } => import::accounts(&project, &file, &owners, &session)?,
         Commands::Grant { entry, ttl } => {
-            let id = role(&project, entry.identity)?;
+            let id = role(&project, entry.identity, handoff)?;
             let title = ask(entry.title, "条目标题: ")?;
             grants::grant(&project, &id, &title, ttl, &session)?;
         }
@@ -329,7 +348,7 @@ fn run() -> Result<()> {
             grants::revoke(&project, token.as_deref(), all)?;
         }
         Commands::Tag { entry, tags } => {
-            let id = role(&project, entry.identity)?;
+            let id = role(&project, entry.identity, handoff)?;
             let title = ask(entry.title, "条目标题: ")?;
             let tags = match tags {
                 Some(tags) => tags,
@@ -339,6 +358,18 @@ fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run() -> Result<()> {
+    let cli = Cli::parse();
+    let mut handoff = None;
+    let result = execute(cli, &mut handoff);
+    let synced = handoff.map_or(Ok(()), syncthing::Handoff::finish);
+    match (result, synced) {
+        (Err(error), Err(sync)) => Err(anyhow::anyhow!("{error}；{sync}")),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        _ => Ok(()),
+    }
 }
 
 fn main() {

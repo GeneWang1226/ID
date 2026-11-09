@@ -2,7 +2,10 @@ use crate::vault::Secret;
 use anyhow::{Result, bail, ensure};
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
     execute,
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -221,8 +224,26 @@ pub fn input(prompt: &str) -> Result<String> {
 }
 
 pub fn secret(prompt: &str) -> Result<Secret> {
+    secret_input(prompt, false)
+}
+pub fn secret_lines(prompt: &str) -> Result<Secret> {
+    secret_input(prompt, true)
+}
+fn secret_input(prompt: &str, multiline: bool) -> Result<Secret> {
     require_terminal()?;
     let _terminal = Terminal::new(false)?;
+    struct PasteGuard(bool);
+    impl Drop for PasteGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                let _ = execute!(io::stdout(), DisableBracketedPaste);
+            }
+        }
+    }
+    let _paste = PasteGuard(multiline);
+    if multiline {
+        execute!(io::stdout(), EnableBracketedPaste)?;
+    }
     let fullscreen = is_fullscreen();
     if fullscreen {
         execute!(io::stdout(), cursor::Hide)?;
@@ -243,32 +264,55 @@ pub fn secret(prompt: &str) -> Result<Secret> {
             }
         }
         let was_empty = result.is_empty();
-        if let Some(k) = key(Duration::from_millis(200))? {
-            match k.code {
-                _ if cancelled(k) => {
-                    if fullscreen {
-                        draw(&[])?;
-                    } else {
-                        print!("\r\n");
+        if event::poll(Duration::from_millis(200))? {
+            match event::read()? {
+                Event::Paste(value) if multiline => {
+                    let value = Zeroizing::new(value);
+                    let mut chars = value.chars().peekable();
+                    while let Some(c) = chars.next() {
+                        let c = if c == '\r' {
+                            if chars.peek() == Some(&'\n') {
+                                chars.next();
+                            }
+                            '\n'
+                        } else {
+                            c
+                        };
+                        ensure!(
+                            !c.is_control() || matches!(c, '\n' | '\t'),
+                            "内容包含控制字符，未保存"
+                        );
+                        let mut encoded = Zeroizing::new([0; 4]);
+                        result.push(c.encode_utf8(&mut *encoded).as_bytes())?;
                     }
-                    bail!("已取消");
                 }
-                KeyCode::Enter => {
-                    if fullscreen {
-                        draw(&[])?;
-                    } else {
-                        print!("\r\n");
+                Event::Key(k) if k.kind != KeyEventKind::Release => match k.code {
+                    _ if cancelled(k) => {
+                        if fullscreen {
+                            draw(&[])?;
+                        } else {
+                            print!("\r\n");
+                        }
+                        bail!("已取消");
                     }
-                    return Ok(result);
-                }
-                KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                    result = Secret::empty();
-                }
-                KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let mut encoded = Zeroizing::new([0; 4]);
-                    result.push(c.encode_utf8(&mut *encoded).as_bytes())?;
-                }
-                KeyCode::Backspace => result.pop_char(),
+                    KeyCode::Enter => {
+                        if fullscreen {
+                            draw(&[])?;
+                        } else {
+                            print!("\r\n");
+                        }
+                        return Ok(result);
+                    }
+                    KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        result = Secret::empty();
+                    }
+                    KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let mut encoded = Zeroizing::new([0; 4]);
+                        result.push(c.encode_utf8(&mut *encoded).as_bytes())?;
+                    }
+                    KeyCode::Backspace => result.pop_char(),
+                    _ => {}
+                },
                 _ => {}
             }
         }

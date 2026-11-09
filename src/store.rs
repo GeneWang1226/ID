@@ -337,6 +337,11 @@ pub(crate) fn put_document(
                 && entry.field_value("Title") != "基础信息",
             "同名基础信息条目不能覆盖为账号"
         );
+        let current = entry.field_value("UserName");
+        ensure!(
+            current.trim().is_empty() || current.trim() == value.trim(),
+            "已有同名账号，未覆盖；如需修改登录名，请在 make manage 中编辑"
+        );
         ensure!(
             entry.field("UserName").is_none_or(|n| !kdbx::protected(n)),
             "受保护登录名请在本地编辑"
@@ -617,6 +622,57 @@ pub fn resolve_path(
         "条目路径有歧义，请在 KeePassXC 中整理"
     );
     Ok(Some(path))
+}
+pub fn write_secret_field(
+    project: &Project,
+    identity: &str,
+    title: Option<&str>,
+    field: &str,
+    session: &Session,
+) -> Result<()> {
+    ui::require_terminal()?;
+    ensure!(
+        !field.trim().is_empty()
+            && field.len() <= 128
+            && !field.chars().any(char::is_control)
+            && !matches!(field, "Title" | "UserName" | "Password" | "URL" | "Notes"),
+        "请使用自定义字段名；账号密码使用默认 Password"
+    );
+    session.unlock(&identity::vault(project, identity)?, true)?;
+    let mut doc = Document::load(project, identity, session)?;
+    let id = if let Some(title) = title.filter(|t| !t.is_empty()) {
+        doc.find_entry(title)?
+            .context("条目不存在，未新建；请先用 make manage 创建账号")?
+    } else {
+        let items = snapshot(&doc)
+            .into_iter()
+            .filter(|i| i.category == "account")
+            .collect::<Vec<_>>();
+        ensure!(
+            !items.is_empty(),
+            "没有已有账号，请先用 make manage 创建账号"
+        );
+        let choices = items
+            .iter()
+            .map(|i| format!("{} · {}", i.path, i.value))
+            .collect::<Vec<_>>();
+        let index = ui::choose("选择字段所属账号", &choices)?.context("已取消")?;
+        items[index].id.clone()
+    };
+    if !doc.entry_mut(&id)?.field_value(field).is_empty()
+        && !ui::confirm(&format!("替换已有 {field}？将保留加密备份。"))?
+    {
+        anyhow::bail!("已取消");
+    }
+    let value = ui::secret_lines(&format!("{field}（可粘贴多行，Enter 保存）: "))?;
+    ensure!(!value.is_empty(), "内容为空，未修改字段");
+    let _lock = WriteLock::acquire(project, identity)?;
+    let entry = doc.entry_mut(&id)?;
+    entry.set_field(field, std::str::from_utf8(value.bytes())?, true);
+    entry.touch();
+    doc.save(project, identity, session)?;
+    println!("字段已保存：{field}。");
+    Ok(())
 }
 pub fn write_password(
     project: &Project,
@@ -1035,11 +1091,12 @@ mod tests {
         put_document(&mut d, "id-info", "姓名", "Synthetic", "备注").unwrap();
         put_document(&mut d, "account", "电话号码", "1234", "").unwrap();
         put_document(&mut d, "account", "GitHub", "user", "").unwrap();
-        put_document(&mut d, "account", "GitHub", "new-user", "").unwrap();
+        let error = put_document(&mut d, "account", "GitHub", "new-user", "").unwrap_err();
+        assert!(error.to_string().contains("未覆盖"));
         let items = snapshot(&d);
         assert_eq!(items.len(), 2);
         assert_eq!(items[1].fields.len(), 2);
-        assert_eq!(items[0].value, "new-user");
+        assert_eq!(items[0].value, "user");
         assert!(put_document(&mut d, "info", "api key", "secret", "").is_err());
         assert_eq!(infer_title("查一下我的github密码"), "github密码");
         put_document(&mut d, "account", "1Password", "public-login", "").unwrap();

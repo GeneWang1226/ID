@@ -27,11 +27,32 @@ impl Default for Ai {
 pub struct Terminal {
     pub allow_plaintext: bool,
 }
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Syncthing {
+    pub enabled: bool,
+    pub api_url: String,
+    pub folder_id: String,
+    pub peer_device: String,
+    pub timeout_seconds: u64,
+}
+impl Default for Syncthing {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_url: "http://127.0.0.1:8384".into(),
+            folder_id: String::new(),
+            peer_device: String::new(),
+            timeout_seconds: 60,
+        }
+    }
+}
 #[derive(Default, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub ai: Ai,
     pub terminal: Terminal,
+    pub syncthing: Syncthing,
 }
 
 impl Config {
@@ -56,7 +77,7 @@ impl Config {
             toml::Value::Table(Default::default())
         };
         let replacement = toml::Value::try_from(self)?;
-        for name in ["ai", "terminal"] {
+        for name in ["ai", "terminal", "syncthing"] {
             let table = value.as_table_mut().context("配置根节点须为表")?;
             let section = table
                 .entry(name)
@@ -153,6 +174,7 @@ pub fn settings(project: &Project) -> Result<()> {
     let mut cfg = Config::load(project)?;
     let terminal = ui::Terminal::new(true)?;
     let mut pending = None;
+    let mut sync_key = None;
     let mut selected = 0;
     loop {
         let key_set =
@@ -178,6 +200,7 @@ pub fn settings(project: &Project) -> Result<()> {
                 toggle(cfg.terminal.allow_plaintext)
             ),
             "保存并退出".into(),
+            "Syncthing 同步交接…".into(),
             "取消".into(),
         ];
         let choice = ui::choose_from("ID 设置", &rows, selected)?;
@@ -224,10 +247,20 @@ pub fn settings(project: &Project) -> Result<()> {
                 if let Some(v) = pending {
                     update_secret(project, "AI_API_KEY", &v)?;
                 }
+                if let Some(v) = sync_key {
+                    update_secret(project, "SYNCTHING_API_KEY", &v)?;
+                }
                 cfg.save(project)?;
                 drop(terminal);
                 println!("设置已保存。");
                 return Ok(());
+            }
+            Some(7) => {
+                if let Err(error) =
+                    crate::syncthing::settings(project, &mut cfg.syncthing, &mut sync_key)
+                {
+                    ui::choose(&error.to_string(), &["返回设置".into()])?;
+                }
             }
             _ => {
                 drop(terminal);

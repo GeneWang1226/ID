@@ -370,7 +370,7 @@ pub(crate) struct Document {
     pub deletions: Vec<String>,
     pub original_paths: std::collections::BTreeMap<String, String>,
 }
-fn fingerprint(path: &Path) -> Result<[u8; 32]> {
+pub(crate) fn fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut input = fs::File::open(path)?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 65536];

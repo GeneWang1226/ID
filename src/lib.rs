@@ -11,6 +11,7 @@ mod kdbx;
 pub mod maintenance;
 pub mod security;
 pub mod store;
+pub mod syncthing;
 pub mod ui;
 pub mod vault;
 

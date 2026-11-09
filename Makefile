@@ -84,7 +84,7 @@ ai: $(BIN) ## 全屏 AI 助手；file=非机密资料文件
 pass: $(BIN) ## 复制密码或 field=字段名；title=条目，show=1 明文查看（须设置允许）
 	@$(BIN) pass
 
-pass-set: $(BIN) ## 录入或修改密码；title=条目，generate=1 生成强密码
+pass-set: $(BIN) ## 录入密码或 field=受保护字段；title=已有条目，generate=1 生成密码
 	@$(BIN) pass-set
 
 settings: $(BIN) ## 方向键修改设置、API key 和全局明文权限

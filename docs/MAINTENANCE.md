@@ -70,6 +70,12 @@ make revoke all=1
 
 ## Syncthing
 
+多端轮流使用时，退出程序并不等于更新已到达 NAS。可在每台运行 ID 的设备用 `make settings` →“Syncthing 同步交接”开启检查：接口连接当前设备的 Syncthing，填入它的 API key，再从列表选择包含密码库的同步文件夹和交接设备（通常是 NAS）。返回主设置后选择“保存并退出”。API key 只保存到本机 `config/secrets/.secrets.env`；普通参数保存到 `config/config.toml`，不修改 Syncthing 的共享或网络配置。默认关闭，未接入时沿用原有操作。
+
+开启后，管理界面、AI、密码取用/录入、普通资料与事件写入、整理、修改主密码和标签、授权入口先确认本机与所选设备同步；有修改时，在退出前触发当前 KDBX 的扫描并等交接设备持有完整的同版本副本。检查连接、错误、待同步数量、文件版本与可用性，临时下载副本不算完成。等待期间可取消；超时或错误时可以重试，退出会明确标记“未确认同步”，不会声称可以切换设备。已保存的数据和加密备份保留。默认等待 60 秒，可用 `syncthing.timeout_seconds` 设置 1–300 秒。
+
+Debian 与 NAS 分别运行 Syncthing 时，各自操作各自的文件；通过 NFS/SMB 查看 NAS 不影响此流程。配置中的同步文件夹路径应对应当前设备的实际目录。出现此身份的 `.sync-conflict-*.kdbx` 会阻止交接，需在 KeePassXC 合并并人工核对。`make new`、`make remove` 和批量导入仍按下述维护流程手动确认同步；直接用 KeePassXC 或其他客户端编辑也不受 ID 控制。这是基于 Syncthing 已公布索引的交接检查，不提供跨设备互斥，无法确认未上线设备尚未公布的修改。
+
 继续把项目目录作为同步目录，在各设备同步根安装同样的 `.stignore`；该文件本身不会由 Syncthing 自动分发。主要同步 `identities/` 内的加密 KDBX；源码由 Git 部署，`config/`、`data/`、`exports/`、`backups/`、日志和 `.id-*` 过程文件不参与同步。
 
 编辑前等待该身份同步完成，尽量一次只在一台设备编辑。CLI 在 `config/.cache/vault-locks/` 对自身写入加锁，并在保存前检查原文件是否变化；它不能阻止 KeePassXC GUI 或另一台设备同时修改。目录整理涉及路径变化，各设备应先部署兼容新路径的版本，再继续编辑；不能将另一个设备残留的旧路径覆盖到新库。检测到更新时刷新后重试；发现 `.sync-conflict-*.kdbx` 时保留两份，在 KeePassXC 用“合并数据库”处理并核对后继续同步。不要直接删冲突副本。

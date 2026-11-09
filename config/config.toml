@@ -8,3 +8,11 @@ thinking_budget = 8192
 
 [terminal]
 allow_plaintext = true
+
+# 每台设备连接自己的 Syncthing；首次在 make settings 中选择同步目录和 NAS。
+[syncthing]
+enabled = false
+api_url = "http://127.0.0.1:8384"
+folder_id = ""
+peer_device = ""
+timeout_seconds = 60

@@ -29,7 +29,7 @@
 
 账号显示登录名和密码状态，不需要再关联另一个“密码记录”。`type=password` 仅列出密码已填的账号；未填密码的账号在全部和账号视图查看。
 
-群组标题显示 KDBX 中的实际路径，展开详情可查看所属群组。新身份的基础信息在 `ID_info/<身份名>`，后续字段继续加入同一条目；兼容旧库的 `ID/身份信息/基础信息`。账号和事件默认进入 `ID/账号`、`ID/事件`，按需创建；已有条目在原群组直接编辑。群组可在 KeePassXC 中改名，项目仍按 UUID 和原生 CustomData 识别，不会仅因改名重复建组。新建账号也可指定已有群组的完整路径，例如 `make item id=example cat=account key='工作/GitHub' value=example-user`；目标群组须已存在。
+群组标题显示 KDBX 中的实际路径，展开详情可查看所属群组。新身份的基础信息在 `ID_info/<身份名>`，后续字段继续加入同一条目；兼容旧库的 `ID/身份信息/基础信息`。账号和事件默认进入 `ID/账号`、`ID/事件`，按需创建；已有条目在原群组直接编辑。群组可在 KeePassXC 中改名，项目仍按 UUID 和原生 CustomData 识别，不会仅因改名重复建组。新建账号也可指定已有群组的完整路径，例如 `make item id=example cat=account key='工作/GitHub' value=example-user`；目标群组须已存在。已有同名账号的登录名不会被覆盖，修改请用 `make manage`。
 
 运行 `make organize id=example` 可将已有基础信息统一为 `ID_info/example`，包括已放在旧项目群组里的条目；同时整理带项目标记的旧根条目。保留原群组及条目 UUID、字段保护、密码、附件与历史，本地解锁、确认后才会保存，并留加密备份。其他用户群组保持原位置；同名或多份基础信息冲突时中止，重复执行不会重复建条目。没有基础信息时仅填入身份名，不自动读取旧 SQLite 或档案。
 
@@ -66,10 +66,13 @@ make pass id=example title=Proton field='恢复短语'
 make pass id=example title=Proton field='恢复短语' show=1
 make pass-set id=example title=GitHub
 make pass-set id=example title=GitHub generate=1
+make pass-set id=example title=Cloudflare field=恢复码
 make clipboard-check
 ```
 
 `pass-set` 同时支持新增和修改：已有账号直接补填或替换，不新增重复条目；替换已有密码会重新验证。`generate=1` 在本地生成 32 位随机密码。不指定标题时，可逐个选择账号或新增条目。
+
+`pass-set field=恢复码` 等自定义属性录入只操作已有条目，不会新建密码条目或替换账号密码。省略标题时选择已有账号，重新验证后隐藏输入，支持终端多行粘贴并保留前导零；按 Enter 保存，空内容或取消不修改。替换已有字段需确认，保存沿用加密备份并保留字段备注。读取使用 `make pass id=example title=Cloudflare field=恢复码`。
 
 `pass field=字段名` 取用对应的自定义字段，省略标题时选择包含该字段的条目，包括基础信息条目。字段名须与库中一致；不存在时报告错误，不回退到密码。原生 CLI 使用 `id pass --id example --title Proton --field 恢复短语`，加 `--show` 明文查看。独立 CLI 的明文输出可能留在终端滚屏中；TUI 临时查看返回后清屏，但终端录制仍可能保留内容。
 
@@ -89,7 +92,13 @@ SSH 下明确显示“服务器文件”，只能选择服务器能访问的路�
 
 AI 可按请求查询普通资料和账号是否已填密码；姓名、电话等写入基础信息，具体服务账号写入独立条目。草稿确认后才保存。没有提供登录名时，会提供本地账号表单；密码在本地录入。受保护字段、附件内容及密码不送给模型，不要在聊天中输入它们。
 
+接着账号操作说“保存双因素身份验证恢复代码”时，AI 会提供所属账号的 `field=恢复码` 本地操作。模型把字段拼进标题时，本地会尝试匹配已有账号；无法唯一确定则让你选择，不会为恢复资料新建账号。
+
 AI 代用密码仍通过 `make grant` / `make use` 临时授权，凭据不放命令参数。详见维护文档。
+
+## 多端切换
+
+Debian 和 NAS 各自运行 Syncthing 时，用 `make settings` →“Syncthing 同步交接”配置本机接口与 API key，选择同步文件夹和 NAS，开启后保存。之后打开身份前自动等待同步，修改后退出时等待 NAS 收到完整更新；看到“可以切换设备”再去另一端打开。NFS/SMB 仍可用来查看 NAS。超时、离线或冲突会明确提示，不会自动忽略；详见[维护文档](MAINTENANCE.md#syncthing)。
 
 ## 命令写入普通资料
 
