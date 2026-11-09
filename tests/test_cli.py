@@ -350,6 +350,20 @@ class CliTests(unittest.TestCase):
         t=Terminal(self,['manage','--id','alice'])
         t.expect('主密码:');t.assert_fullscreen_active();t.send(b'\x03');t.finish(130)
 
+    def test_password_mask_tracks_unicode_characters_and_both_backspace_encodings(self):
+        t=Terminal(self,['manage','--id','alice'])
+        t.expect('主密码:');t.send('🙂');t.expect('› •');t.read(.1)
+        self.assertNotIn('••'.encode(),t.output)
+        t.send('x');t.expect('› ••')
+        t.send(b'\x08');t.expect('› • ')
+        t.send(b'\x7f');t.expect('›   ')
+        t.send('中');t.expect('› • ')
+        t.send(b'\x15');t.expect('›   ')
+        t.send(MASTER+'🙂');t.send(b'\x08\r');t.expect('Enter 展开');t.send('q')
+        output=t.finish()
+        for value in [MASTER,'🙂','中']:
+            self.assertNotIn(value.encode(),output)
+
     def test_plaintext_fails_closed_and_reauthenticates(self):
         self.add()
         t = Terminal(self, ["pass", "--show", "--id", "alice", "--title", "GitHub"])
@@ -1067,6 +1081,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         self.assertEqual(output.count(b"\x1b[?1049h"), 1)
         self.assertEqual(output.count(b"\x1b[?1049l"), 1)
+
+    def test_ai_backspace_accepts_ctrl_h_and_del_and_joins_previous_line(self):
+        draft={'reply':'编辑测试通过','items':[],'events':[],'secrets':[]}
+        requests=self.ai_server([(200,{'choices':[{'message':{'content':json.dumps(draft)}}]})])
+        t=Terminal(self,['ai','--id','alice'])
+        t.expect('主密码:');t.send(MASTER+'\r');t.expect('空行提交')
+        t.send('保错');t.send(b'\x08');t.send('存🙂');t.send(b'\x7f');t.send('账号\r')
+        t.send('备注甲乙');t.send(b'\x1b[H\x08');t.send(':');t.send(b'\x1b[F\x7f\r\r')
+        t.expect('下一步');t.send('q');t.finish()
+        self.assertEqual(requests[0]['messages'][-1]['content'],'保存账号:备注甲')
 
     def test_ai_conversation_scroll_and_ctrl_c_restore_terminal(self):
         draft = {"reply": "SCROLL_TOP\n" + "\n".join(f"第{i}行回复" for i in range(35)) + "\nSCROLL_END"}

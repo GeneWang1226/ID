@@ -120,9 +120,20 @@ pub fn key(timeout: Duration) -> Result<Option<event::KeyEvent>> {
         && let Event::Key(k) = event::read()?
         && k.kind != KeyEventKind::Release
     {
-        return Ok(Some(k));
+        return Ok(Some(normalize_key(k)));
     }
     Ok(None)
+}
+fn normalize_key(mut key: event::KeyEvent) -> event::KeyEvent {
+    // SSH 终端的退格可能是 BS（Ctrl+H）、DEL，或扩展键盘协议中的控制字符。
+    if matches!(key.code, KeyCode::Char('\x08' | '\x7f'))
+        || matches!(key.code, KeyCode::Char('h' | 'H'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        key.code = KeyCode::Backspace;
+        key.modifiers.remove(KeyModifiers::CONTROL);
+    }
+    key
 }
 pub fn cancelled(key: event::KeyEvent) -> bool {
     key.code == KeyCode::Esc
@@ -260,10 +271,10 @@ fn secret_input(prompt: &str, multiline: bool) -> Result<Secret> {
                 let (lines, _) = secret_frame(prompt, current.0, current.1);
                 draw(&lines)?;
                 size = Some(current);
-                secret_mask(!result.is_empty(), current)?;
+                secret_mask(&result, current)?;
             }
         }
-        let was_empty = result.is_empty();
+        let previous_length = result.bytes().len();
         if event::poll(Duration::from_millis(200))? {
             match event::read()? {
                 Event::Paste(value) if multiline => {
@@ -286,38 +297,41 @@ fn secret_input(prompt: &str, multiline: bool) -> Result<Secret> {
                         result.push(c.encode_utf8(&mut *encoded).as_bytes())?;
                     }
                 }
-                Event::Key(k) if k.kind != KeyEventKind::Release => match k.code {
-                    _ if cancelled(k) => {
-                        if fullscreen {
-                            draw(&[])?;
-                        } else {
-                            print!("\r\n");
+                Event::Key(k) if k.kind != KeyEventKind::Release => {
+                    let k = normalize_key(k);
+                    match k.code {
+                        _ if cancelled(k) => {
+                            if fullscreen {
+                                draw(&[])?;
+                            } else {
+                                print!("\r\n");
+                            }
+                            bail!("已取消");
                         }
-                        bail!("已取消");
-                    }
-                    KeyCode::Enter => {
-                        if fullscreen {
-                            draw(&[])?;
-                        } else {
-                            print!("\r\n");
+                        KeyCode::Enter => {
+                            if fullscreen {
+                                draw(&[])?;
+                            } else {
+                                print!("\r\n");
+                            }
+                            return Ok(result);
                         }
-                        return Ok(result);
+                        KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                            result = Secret::empty();
+                        }
+                        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+                            let mut encoded = Zeroizing::new([0; 4]);
+                            result.push(c.encode_utf8(&mut *encoded).as_bytes())?;
+                        }
+                        KeyCode::Backspace => result.pop_char(),
+                        _ => {}
                     }
-                    KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        result = Secret::empty();
-                    }
-                    KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let mut encoded = Zeroizing::new([0; 4]);
-                        result.push(c.encode_utf8(&mut *encoded).as_bytes())?;
-                    }
-                    KeyCode::Backspace => result.pop_char(),
-                    _ => {}
-                },
+                }
                 _ => {}
             }
         }
-        if fullscreen && was_empty != result.is_empty() {
-            secret_mask(!result.is_empty(), size.unwrap())?;
+        if fullscreen && previous_length != result.bytes().len() {
+            secret_mask(&result, size.unwrap())?;
         }
     }
 }
@@ -362,14 +376,11 @@ fn secret_frame(prompt: &str, width: u16, height: u16) -> (Vec<String>, Option<(
     (lines, Some(((left + 2) as u16, (top + 3) as u16, inner)))
 }
 
-fn secret_mask(entered: bool, size: (u16, u16)) -> Result<()> {
+fn secret_mask(secret: &Secret, size: (u16, u16)) -> Result<()> {
     if let (_, Some((column, row, width))) = secret_frame("", size.0, size.1) {
-        // 固定圆点不反映密码长度，真实输入始终只留在 Secret 缓冲区。
-        let text = if entered {
-            "› ••••••••"
-        } else {
-            "› "
-        };
+        // 按 Unicode 字符计数，中文和 emoji 不按 UTF-8 字节数重复回显。
+        let count = std::str::from_utf8(secret.bytes())?.chars().count();
+        let text = format!("› {}", "•".repeat(count.min(width.saturating_sub(2))));
         execute!(io::stdout(), cursor::MoveTo(column, row))?;
         print!(
             "{}",
@@ -406,8 +417,29 @@ mod tests {
             if let Some((column, row, inner)) = position {
                 assert!((row as usize) < lines.len());
                 assert!(column as usize + inner < width as usize);
-                assert!(inner >= "› ••••••••".width());
+                assert!(inner >= "› ".width());
             }
         }
+    }
+
+    #[test]
+    fn backspace_normalization_preserves_other_keys_and_repeat_events() {
+        for code in [
+            KeyCode::Char('h'),
+            KeyCode::Char('H'),
+            KeyCode::Char('\x08'),
+            KeyCode::Char('\x7f'),
+        ] {
+            let mut key = event::KeyEvent::new(code, KeyModifiers::CONTROL);
+            key.kind = KeyEventKind::Repeat;
+            let key = normalize_key(key);
+            assert_eq!(key.code, KeyCode::Backspace);
+            assert_eq!(key.kind, KeyEventKind::Repeat);
+            assert!(!key.modifiers.contains(KeyModifiers::CONTROL));
+        }
+        let literal = event::KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert_eq!(normalize_key(literal), literal);
+        let left = event::KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(normalize_key(left), left);
     }
 }

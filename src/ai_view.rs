@@ -173,10 +173,12 @@ impl ChatView {
                         cursor -= 1;
                         input.remove(cursor);
                     }
-                    KeyCode::Backspace if input.is_empty() => {
+                    KeyCode::Backspace => {
                         if let Some(previous) = submitted.pop() {
-                            input = previous.chars().collect();
-                            cursor = input.len();
+                            let mut previous: Vec<char> = previous.chars().collect();
+                            cursor = previous.len();
+                            previous.append(&mut input);
+                            input = previous;
                         }
                     }
                     KeyCode::Delete if cursor < input.len() => {
