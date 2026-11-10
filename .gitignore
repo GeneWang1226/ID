@@ -25,6 +25,9 @@ data/*.db-wal
 data/*.db-shm
 backups/
 
+# Syncthing 本机文件夹标记，保留目录但不进 Git
+/.stfolder/
+
 # 系统垃圾
 .DS_Store
 Thumbs.db
