@@ -972,7 +972,8 @@ pub fn records(
     let mut records = items
         .iter()
         .filter(|i| match view {
-            "account" => i.category == "account",
+            "account" => i.category == "account" && !i.email,
+            "email" => i.category == "account" && i.email,
             "password" => i.category == "account" && i.password_set,
             "info" => i.category == "info",
             _ => true,
@@ -1050,6 +1051,8 @@ mod tests {
         let mail = items.iter().find(|i| i.key == "Proton").unwrap();
         assert!(mail.email);
         assert!(mail.fields.iter().all(|f| f.value.is_none()));
+        assert_eq!(records(&items, &BTreeMap::new(), "email", "").len(), 1);
+        assert_eq!(records(&items, &BTreeMap::new(), "account", "").len(), 1);
         assert!(put_document(&mut doc, "email", "Invalid", "not-an-email", "").is_err());
         for address in ["x@example.com", "x+tag@example.com"] {
             assert!(email_address(address));

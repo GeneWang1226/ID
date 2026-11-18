@@ -51,7 +51,7 @@ enum Commands {
     Manage {
         #[command(flatten)]
         identity: Identity,
-        #[arg(long="type",env="ID_LIST_TYPE",default_value="all",value_parser=["all","account","password","info"])]
+        #[arg(long="type",env="ID_LIST_TYPE",default_value="all",value_parser=["all","account","email","password","info"])]
         view: String,
         #[arg(long = "cat", env = "ID_LIST_CATEGORY", default_value = "")]
         category: String,
