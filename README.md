@@ -1,12 +1,19 @@
 # ID
 
-在命令行里管理多个身份的账号、密码与个人资料。Rust 编写，提供全屏 TUI；KeePassXC 负责密码库的加解密，数据统一保存在每个身份自己的 KDBX 中。
+ID is a local-first identity manager for the terminal. It provides a Rust TUI around KeePassXC, keeps each identity in its own KDBX vault, and works with Syncthing for encrypted multi-device storage.
 
-不运行 Web 服务，不依赖 SQLite。可以用 KeePassXC 等兼容客户端打开同一密码库，用 Syncthing 同步加密文件。
+## Highlights
 
-## 开始使用
+- One encrypted KDBX vault per identity.
+- Native KeePass groups and entries for accounts, email, profile data, events, custom fields, and attachments.
+- Full-screen terminal UI with local password and protected-field operations.
+- Optional local AI assistance that receives metadata only; passwords and protected values stay local.
+- Safe migration from older ID layouts with backups and conflict checks.
+- No runtime database or web service.
 
-需要 Linux、Rust 1.89+、Make 和 `keepassxc-cli`。Debian 的依赖与 Rust 安装命令见 [安装与检查](docs/MAINTENANCE.md#安装与检查)。Make 会识别 PATH 和常规 rustup 安装目录中的 Cargo。
+## Quick start
+
+Requirements: Linux, Rust 1.89+, GNU Make, and `keepassxc-cli`.
 
 ```sh
 make build
@@ -15,82 +22,52 @@ make new id=example
 make manage id=example
 ```
 
-新建身份时输入并确认该身份的主密码，不再读取配置中的初始密码；同时创建第一层 `ID/ID_info/example` 基础信息条目，身份名自动填入。已有身份直接运行 `make manage`，方向键选身份并解锁；更换主密码使用 `make passwd`。详情见 [使用说明](docs/GUIDE.md)。
+`make new` asks for an independent master password and creates `ID/ID_info/example` in `identities/example.kdbx`.
 
-## 数据怎么放
+Common commands:
 
-| 内容 | KDBX 中的表示 |
-| --- | --- |
-| GitHub、Telegram 等普通账号 | 原生条目；标题、登录名、密码、网址和备注放在同一条目 |
-| 邮箱账号 | 专用 `ID/ID_emails` 群组；服务商、应急联系方式、恢复资料等使用独立属性 |
-| 姓名、生日、电话、偏好等 | 一个“基础信息”条目，使用原生自定义字段，密码可以为空 |
-| 恢复码、API key 等 | 对应条目里的受保护自定义字段 |
-| PDF、应急说明等文件 | 对应条目的原生附件 |
-| 大事记 | 事件条目 |
-| 图标 | 原生 IconID；TUI 显示对应的文字图标，自定义图片保留在 KDBX |
+```sh
+make manage id=example             # browse accounts, passwords, and profile data
+make pass-set id=example title=GitHub
+make pass id=example title=GitHub
+make ai id=example
+make organize id=example           # migrate an older vault layout
+make doctor id=example
+make backup
+```
 
-普通字段可设维度与备注；维度、字段备注和条目类型使用 KeePass CustomData，不把所有资料塞进一段 JSON。其他客户端仍可直接编辑原生字段和附件。自定义图片在终端用备用图标表示，不要求特定字体或图片协议。
+## Vault layout
 
-新身份创建时立即建立原生群组与基础信息条目；账号、事件按需建立群组：
+The project uses ordinary KeePass groups. `Passwords` is not required.
 
 ```text
 ID/
-├── ID_info
-│   └── example（基础信息，身份名 = example）
-├── ID_account
-│   └── GitHub、Telegram 等条目
-├── ID_emails
-│   └── Proton、Gmail、163邮箱等条目
-└── ID_events
-    └── 重要变更和提醒
+├── ID_info       profile fields and identity information
+├── ID_account    website, cloud, and application accounts
+├── ID_emails     email accounts and their protected recovery fields
+└── ID_events     important changes and reminders
 ```
 
-`ID`、`ID_info`、`ID_account`、`ID_emails` 和 `ID_events` 是本项目的命名约定，KDBX 不要求 `ID_` 前缀；`Passwords` 也不是强制群组。旧库的 `ID/身份信息/基础信息` 日常编辑时继续复用；用户显式执行 `make organize` 才统一为第一层 `ID` 下的规范群组。分组及条目用原生 UUID 识别，分组用途在 CustomData 的 `ID.Group` 中记录；在 KeePassXC 中重命名群组后仍能复用。其他用户群组保留原位置，TUI 按实际群组展示；重名条目使用完整路径区分。项目是 KDBX 的命令行管理外壳，密码库可独立用其他兼容客户端管理。
+Accounts and passwords share one native entry. Recovery codes, API keys, and similar values are protected custom fields. Files belong in the corresponding KeePass entry as native attachments. Set KeePassXC-Browser's new-credentials group to `ID/ID_account` manually; ID does not change browser-plugin settings.
 
-旧库不会因为升级自动移动。运行 `make organize id=example`，本地解锁并确认后，`Passwords/ID`、旧 `ID_info`、`ID_emails` 和 `ID/账号` 等项目群组统一到第一层 `ID` 下，基础信息位于 `ID/ID_info/example`，带项目标记的旧根条目归入相应用途的原生项目群组；保留 UUID、字段保护、密码、附件和历史，先留加密备份。其他用户群组不搬动，同名冲突则中止。更多群组的用途建议见 [使用说明](docs/GUIDE.md)。
+## Security model
 
-## 常用入口
+KeePassXC performs KDBX encryption and merging. ID keeps exported XML in Linux anonymous memory, writes through a temporary encrypted transaction, verifies the result, and leaves an encrypted backup before replacement. It never sends passwords, master passwords, protected values, or attachment contents to AI services.
 
-```sh
-make manage                     # 全部资料
-make manage id=example type=info # 基础信息
-make pass id=example             # 选择条目、复制密码
-make pass id=example title=Proton field='恢复短语' # 复制自定义字段
-make pass-set id=example         # 在本地录入或修改密码
-make ai id=example               # 全屏 AI 助手
-make organize id=example         # 旧项目条目归入原生群组
-make backup                     # 备份各身份加密密码库
-make doctor                     # 只读检查身份目录异常
-make doctor id=example fix=1     # 本地确认后归档冲突副本、遗留备份
-make remove id=example          # 确认、验证后移除，原文件保留在本机归档
-make help
-```
+Do not open the same vault for editing on two devices at once. Wait for Syncthing to finish before switching devices. See the maintenance guide for conflict handling and backups.
 
-TUI 中 Enter 展开详情，`c` 取用字段，`o` 操作，`n` 新增，`l` 锁定；方向键选择、翻页。字段可复制或临时查看，多行内容支持滚动，返回后隐藏。普通资料只解锁一次会话；取用自定义字段、修改密码、删除内容、导出附件和明文查看等操作需再次验证主密码。空闲五分钟清除缓存主密码，退出即锁定。
+## Documentation
 
-新增选择“邮箱”，会放入 `ID/ID_emails`；展开后的“邮箱常用属性”提供恢复码、恢复短语、应急邮箱、应用密码等预设名称，仍可添加任意属性。已有邮箱通过 `make organize` 整理或在条目操作里“归为邮箱”；恢复资料保留原字段，已有不同值不覆盖。
+- [Documentation index](docs/README.md)
+- [English guide](docs/en/guide.md)
+- [English maintenance guide](docs/en/maintenance.md)
+- [中文使用说明](docs/zh-CN/GUIDE.md)
+- [中文维护文档](docs/zh-CN/MAINTENANCE.md)
+- [Changelog](CHANGELOG.md)
 
-`make help` 按日常使用、身份管理、维护、自动化与授权、开发分组。密码录入统一用 `pass-set`，加 `generate=1` 生成强密码；`pass` 默认复制，加 `show=1` 明文查看（须设置允许）。重复的列表和密码命令已移除，替代关系见 [使用说明](docs/GUIDE.md#命令整理)。
+## Development
 
-AI 查询会先通过只读 manage 工具读取当前身份的条目路径、分组、公开字段、受保护字段名称和附件数量；不提供密码、密钥、恢复码或附件内容。本地密码操作不经过模型。云主账号与子账号保持独立条目，AI 会先按服务名查询并使用完整条目标题关联，避免把密钥或 CSV 当成新账号。AI 外部服务按需配置 API key，正常资料管理无需网络。不要把密码、主密码或恢复码输入聊天。
-
-AI 可用只读 `doctor` 工具诊断当前身份目录，只向模型提供异常类别和数量；修复操作由本地界面列出实际文件并确认。也可直接输入 `/doctor` 检查、`/repair` 归档，无需调用模型。冲突副本和遗留加密备份移入 `backups/identity-cleanup/`，正式库保留；临时文件、锁、空库、链接和未知资料仅提示，不自动删除。发现同步冲突时，CLI 写入会中止，即使未开启同步交接检查。
-
-## 安全与平台范围
-
-本版本的资料写入使用 Linux 匿名内存文件，把修改交给 KeePassXC 导入、合并到原库副本，再原子替换；明文 XML 不落磁盘。保存保留已有加密参数、密码、历史、附件和自定义图标，自动留加密备份；检测到外部更新会拒绝覆盖。
-
-完整编辑目前支持 Linux，包括 SSH。其他平台尚未验证，也没有以明文临时文件回退的编辑路径。Rust 和清零缓冲区不能防止同用户调试、恶意软件、系统交换或系统被接管；本项目没有经过独立安全审计。KDBX 不提供跨设备事务锁，避免多端同时编辑同一身份。
-
-## 项目目录
-
-- `src/`：Rust CLI、TUI、KeePassXC 适配。
-- `identities/<身份>.kdbx`：一身份一文件，唯一的日常资料存储，不进 Git；兼容旧的 `<身份>/passwords/<身份>.kdbx` 路径，两处同时存在时拒绝选择，避免写错库。
-- `config/config.toml`：非敏感设置；`config/secrets/.secrets.env`：本机密钥。
-- `backups/vaults/`：本机加密备份；`backups/legacy-identities/`：整理时保留的旧身份目录；`backups/removed-identities/`：主动移除的身份原文件。旧目录归档可能包含明文档案，都不进 Git 或 Syncthing。
-- `exports/`：用户主动导出的明文附件，不进 Git 或 Syncthing。
-- `template/`：保留的旧身份模板，程序不再复制其目录；新身份仅创建 KDBX。
-- `tests/`：只使用临时身份和合成密码库的测试。
+Development happens on `dev`. Run:
 
 ```sh
 make test
@@ -98,3 +75,9 @@ make check
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
+
+Identity vaults, backups, logs, exports, and secret configuration are local data and are excluded from Git.
+
+## License
+
+ID is available under the [MIT License](LICENSE).

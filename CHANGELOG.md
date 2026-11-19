@@ -9,6 +9,7 @@
 
 ## 未发布
 
+- Added an MIT license, a concise English README, an English documentation set, and a categorized Chinese documentation set under `docs/`.
 - 统一 KDBX 项目结构为第一层 `ID` 及其 `ID_info`、`ID_account`、`ID_emails`、`ID_events` 子群组；`make organize` 可迁移旧路径和 `Passwords/ID`，保留 UUID、密码、受保护字段、附件与历史，冲突时中止且不删除空群组。
 - 新建身份直接创建 `ID/ID_info/<身份名>`；查询、邮箱归类、事件保存和 TUI 路径统一使用新标记。KeePassXC-Browser 的新凭据保存组由用户手动设为 `ID/ID_account`，项目不修改插件配置。
 - AI 只读查询支持账号、邮箱、基础信息和关键词筛选；账号结果带完整条目路径、分组、公开字段、受保护字段名称和附件数量，便于关联云主账号与子账号，但不发送密码、密钥或附件内容。
@@ -66,7 +67,7 @@
 - 非机密信息：共用 SQLite `data/id.db`，`make item` / `event` / `show`
 - Web：Next.js + Docker（`make web`），编辑 SQLite 非机密条目
 - 部署：`main` / `dev` 分支；`.gitignore` / `.stignore` 与 Syncthing 错开
-- 文档：`README`、`docs/GUIDE.md`、`docs/MAINTENANCE.md`
+- 文档：`README`、`docs/zh-CN/GUIDE.md`、`docs/zh-CN/MAINTENANCE.md`
 
 [Unreleased]: https://github.com/GeneWang1226/ID/compare/v0.1.1...dev
 [0.1.1]: https://github.com/GeneWang1226/ID/compare/v0.1.0...v0.1.1
