@@ -7,7 +7,7 @@
 
 身份数据在 `identities/` 的 KDBX 中，靠 Syncthing，不写入此日志。
 
-## 未发布
+## [0.2.1] — 2026-11-19
 
 - Track `identities/README.md` as a safe guide while continuing to exclude all KDBX files; document using the project root `ID/` as the Syncthing folder.
 - Added the project tagline: “Helping you manage your many identities, elegantly.”
@@ -73,5 +73,6 @@
 - 文档：`README`、`docs/zh-CN/GUIDE.md`、`docs/zh-CN/MAINTENANCE.md`
 
 [Unreleased]: https://github.com/GeneWang1226/ID/compare/v0.1.1...dev
+[0.2.1]: https://github.com/GeneWang1226/ID/compare/v0.2.0...v0.2.1
 [0.1.1]: https://github.com/GeneWang1226/ID/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/GeneWang1226/ID/releases/tag/v0.1.0
