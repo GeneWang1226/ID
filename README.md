@@ -1,5 +1,7 @@
 # ID
 
+> Helping you manage your many identities, elegantly.
+
 ID is a local-first identity manager for people who manage multiple identities. Its Rust TUI keeps each identity in an independent KeePassXC KDBX vault, with accounts, profiles, credentials, and events organized per identity and synchronized safely across devices.
 
 ## Highlights
