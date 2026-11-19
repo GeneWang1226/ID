@@ -470,7 +470,7 @@ pub fn manage(
                         }
                         'm' if item.category == "account"
                             && ui::confirm(
-                                "归为邮箱并移入 ID_emails？保留已有密码、字段与附件。",
+                                "归为邮箱并移入 ID/ID_emails？保留已有密码、字段与附件。",
                             )? =>
                         {
                             store.email(&item.id)?

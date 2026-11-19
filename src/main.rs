@@ -32,7 +32,7 @@ struct Entry {
 }
 #[derive(Subcommand)]
 enum Commands {
-    /// 整理基础信息、ID_emails 邮箱群组与本项目旧根条目
+    /// 将项目群组统一整理到第一层 ID
     Organize {
         #[command(flatten)]
         identity: Identity,

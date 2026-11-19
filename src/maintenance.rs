@@ -28,7 +28,7 @@ pub fn new_identity(project: &Project, name: &str) -> Result<()> {
         private_dir(vault.parent().unwrap())?;
         kdbx::create(&vault, name, &password)?;
         println!(
-            "已创建身份 {name}，基础信息已保存到 ID_info/{name}。用 make manage id={name} 继续填写。"
+            "已创建身份 {name}，基础信息已保存到 ID/ID_info/{name}。用 make manage id={name} 继续填写。"
         );
     } else {
         identity::vault(project, name)?;

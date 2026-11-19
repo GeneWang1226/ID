@@ -197,12 +197,21 @@ fn entry_kind<'a>(entry: &'a Node, path: &str, groups: &BTreeMap<String, String>
         "account" => "account",
         _ => match path.rsplit_once('/').map(|(parent, _)| parent) {
             Some(parent)
-                if groups.get(parent).is_some_and(|k| k == "info") || parent == "ID/身份信息" =>
+                if groups.get(parent).is_some_and(|k| k == "info")
+                    || matches!(
+                        parent,
+                        "ID_info"
+                            | "Passwords/ID_info"
+                            | "ID/身份信息"
+                            | "ID/ID_info"
+                            | "Passwords/ID/身份信息"
+                    ) =>
             {
                 "info"
             }
             Some(parent)
-                if groups.get(parent).is_some_and(|k| k == "event") || parent == "ID/事件" =>
+                if groups.get(parent).is_some_and(|k| k == "event")
+                    || matches!(parent, "ID/事件" | "ID/ID_events") =>
             {
                 "event"
             }
@@ -258,6 +267,7 @@ pub(crate) fn snapshot(doc: &Document) -> Vec<Item> {
                 .collect::<Vec<_>>();
             let email = e.meta("ID.AccountType") == "email"
                 || path.starts_with("ID_emails/")
+                || path.starts_with("ID/ID_emails/")
                 || groups
                     .iter()
                     .any(|(group, kind)| kind == "email" && path.starts_with(&format!("{group}/")));
@@ -445,14 +455,14 @@ impl<'a> Store<'a> {
             return Ok(());
         }
         if !ui::confirm(&format!(
-            "整理 {count} 项项目资料；基础信息统一到 ID_info/{}，邮箱归入 ID_emails，旧项目根条目归组。先留加密备份，保留 UUID、密码、附件和历史。",
+            "将整理 {count} 项项目资料到 ID/；基础信息统一到 ID/ID_info/{}，邮箱归入 ID/ID_emails。先留加密备份，保留 UUID、密码、附件和历史。",
             self.identity
         ))? {
             return Ok(());
         }
         doc.save(self.project, self.identity, self.session)?;
         println!(
-            "已整理 {count} 项项目资料，基础信息位于 ID_info/{}。",
+            "已整理 {count} 项项目资料，基础信息位于 ID/ID_info/{}。",
             self.identity
         );
         Ok(())
@@ -1031,8 +1041,8 @@ mod tests {
         };
         put_document(&mut doc, "account", "GitHub", "tester@example.com", "").unwrap();
         put_document(&mut doc, "email", "Proton", "tester@example.com", "Mailbox").unwrap();
-        assert!(doc.find_path("ID/账号/GitHub").unwrap().is_some());
-        let id = doc.find_path("ID_emails/Proton").unwrap().unwrap();
+        assert!(doc.find_path("ID/ID_account/GitHub").unwrap().is_some());
+        let id = doc.find_path("ID/ID_emails/Proton").unwrap().unwrap();
         let e = doc.entry_mut(&id).unwrap();
         e.set_field("proton_recovery_phrase", "001234", true);
         e.set_field("backup_codes", "old-code", true);
@@ -1119,7 +1129,7 @@ mod tests {
         put_document(&mut doc, "id-info", "姓名", "Synthetic", "").unwrap();
         let information = information_id(&doc).unwrap().unwrap();
         assert_ne!(information, "external");
-        assert!(doc.find_path("ID/身份信息/基础信息").unwrap().is_some());
+        assert!(doc.find_path("ID/ID_info/基础信息").unwrap().is_some());
         let outside = doc.entry_mut("external").unwrap();
         assert_eq!(outside.field_value("UserName"), "original");
         assert!(outside.field("姓名").is_none());
