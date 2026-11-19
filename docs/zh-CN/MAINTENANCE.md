@@ -36,7 +36,7 @@ make grants
 make revoke all=1
 ```
 
-新建时设置并确认独立主密码，同时创建 `ID_info/<身份名>` 原生基础信息条目，填入“身份名”；主密码仅用于加密，不会作为条目字段或配置保存。完整初始化并验证后才发布 `identities/<身份名>.kdbx`，不覆盖已有库，也不再复制旧模板的子目录、档案或指引。旧版本创建的库仍使用当时的密码，需用 `make passwd` 提供旧密码后更换。条目 Tags：`ai-deny` 禁止 AI 授权，`ai-auto` 限时多次，无标签默认一次性。临时凭据放本机运行时目录，不入 Git 或 Syncthing。
+新建时设置并确认独立主密码，同时创建第一层 `ID/ID_info/<身份名>` 原生基础信息条目，填入“身份名”；主密码仅用于加密，不会作为条目字段或配置保存。完整初始化并验证后才发布 `identities/<身份名>.kdbx`，不覆盖已有库，也不再复制旧模板的子目录、档案或指引。旧版本创建的库仍使用当时的密码，需用 `make passwd` 提供旧密码后更换。条目 Tags：`ai-deny` 禁止 AI 授权，`ai-auto` 限时多次，无标签默认一次性。临时凭据放本机运行时目录，不入 Git 或 Syncthing。
 
 受保护自定义字段通过管理界面的 `c` 或 `make pass field=字段名` 在本地取用，每次重新验证主密码。复制沿用本机 KeePassXC 或 SSH OSC 52 与十秒清理；查看沿用 `terminal.allow_plaintext`，打开的 TUI 字段窗口也会响应撤销权限并清屏。内容不送给模型、不写日志；清屏无法撤销终端录制或已粘贴的内容。
 
@@ -50,9 +50,9 @@ make revoke all=1
 
 `id import 表格.xlsx --owner 原使用者=example` 仍支持旧七列账号表。账号、地区与服务商入原生字段，备注、密码提示和详细数据作为受保护字段；各身份分别解锁和提交。多身份导入是逐库完成，重复导入会跳过已完成行。原表不会再另存明文备份，也不会删除用户提供的文件。
 
-`make organize id=example` 将现有基础信息统一为原生 `ID_info/example`，同时整理带项目标记的旧根条目，无需再次导入旧资料。基础信息可来自根目录或旧项目群组：复用群组和条目的 UUID，保留字段、保护标记、密码、附件和历史；缺少基础信息时仅创建身份名。若旧项目身份群组被移动，其他内容仍保留在原群组节点中，不删除原有群组或文件。解锁后预检并要求确认，保存前留加密备份；同名目标、重复基础信息或群组标记冲突时中止，保留原库。其他用户群组不搬动。
+`make organize id=example` 将旧的 `Passwords/ID`、`ID_info`、`ID_emails`、`ID/账号` 和 `ID/事件` 统一为第一层 `ID` 下的 `ID_info`、`ID_account`、`ID_emails`、`ID_events`，基础信息目标为 `ID/ID_info/example`，同时整理带项目标记的旧根条目。基础信息可来自根目录或旧项目群组：复用群组和条目的 UUID，保留字段、保护标记、密码、附件和历史；缺少基础信息时仅创建身份名。`Passwords` 和其他用户群组不自动删除或搬动。解锁后预检并要求确认，保存前留加密备份；同名目标、重复基础信息、重复用途标记或群组路径冲突时中止，保留原库。
 
-邮箱条目使用 `ID.AccountType=email`，仍是 `ID.Kind=account`；原生 `ID_emails` 群组使用 `ID.Group=email` 和邮箱图标。`make organize` 也整理明确的邮箱导入记录、邮箱群组及带已知邮箱服务商的项目账号；其他网站与未识别条目不自动迁移，可手动确认“归为邮箱”。邮箱字段归一化仅补充已知别名，保留原值、原字段及保护状态；恢复类属性始终受保护。未知备注和源记录不自动解释或删除。
+邮箱条目使用 `ID.AccountType=email`，仍是 `ID.Kind=account`；`ID/ID_emails` 群组使用 `ID.Group=email` 和邮箱图标。`make organize` 也整理明确的邮箱导入记录、邮箱群组及带已知邮箱服务商的项目账号；其他网站与未识别条目不自动迁移，可手动确认“归为邮箱”。邮箱字段归一化仅补充已知别名，保留原值、原字段及保护状态；恢复类属性始终受保护。未知备注和源记录不自动解释或删除。
 
 历史沿用 KeePassXC 原生合并规则；时间戳相同的历史版本可能被合并，保存前的加密备份保留原始库。
 
@@ -98,6 +98,6 @@ Debian 与 NAS 分别运行 Syncthing 时，各自操作各自的文件；通过
 
 KDBX 的加解密、附件格式、合并由 KeePassXC 完成。Rust 读取 KeePassXC 导出的 XML 到内存，写入通过 Linux memfd、导入加密变更库、合并至原库加密副本，校验后原子替换。没有明文临时文件回退。标准图标编号参考 [KeePassXC 的格式说明](https://github.com/keepassxreboot/keepassxc-specs/blob/master/kdbx-xml/rfc.md#standard-icons)。
 
-群组使用原生 Group、UUID、图标与时间字段；项目用途记录在群组 CustomData 的 `ID.Group` 中，条目类型使用 `ID.Kind`。这是项目约定，不是 KeePass 的保留名称；[KeePass 官方格式说明](https://keepass.info/help/kb/kdbx.html)建议将应用扩展数据放在 XML 的 CustomData 中。已有群组不自动搬动或删除；发现同名路径或重复用途标记会拒绝写入。保存后核对条目路径和项目群组标记，防止导入合并时丢失群组关系。
+群组使用原生 Group、UUID、图标与时间字段；项目用途记录在群组 CustomData 的 `ID.Group` 中，条目类型使用 `ID.Kind`。这是项目约定，不是 KeePass 的保留名称；[KeePass 官方格式说明](https://keepass.info/help/kb/kdbx.html)建议将应用扩展数据放在 XML 的 CustomData 中。`Passwords` 不是强制群组，项目群组可直接位于 KDBX 第一层。`make organize` 只移动带项目标记或明确旧路径的群组，不自动删除空群组；发现同名路径或重复用途标记会拒绝写入。保存后核对条目路径和项目群组标记，防止导入合并时丢失群组关系。
 
 单次导出最多 64 MiB（包括附件的编码与历史），大型附件可能需要用 KeePassXC GUI 管理。当前只支持密码解锁，尚无 keyfile、YubiKey 或自定义图片终端渲染入口。内存清零不等于抵御同用户恶意程序、交换文件、核心转储或系统被接管；请按实际威胁模型使用。

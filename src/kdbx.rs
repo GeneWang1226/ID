@@ -174,6 +174,12 @@ fn new_group(name: &str, icon: u32) -> Node {
     group
 }
 
+const PROJECT_ROOT: &str = "ID";
+const INFO_GROUP: &str = "ID_info";
+const ACCOUNT_GROUP: &str = "ID_account";
+const EMAIL_GROUP: &str = "ID_emails";
+const EVENT_GROUP: &str = "ID_events";
+
 #[cfg(target_os = "linux")]
 fn xml_input(xml: &[u8]) -> Result<(fs::File, PathBuf)> {
     use std::os::fd::AsRawFd;
@@ -206,11 +212,14 @@ pub(crate) fn create(path: &Path, name: &str, password: &crate::vault::Secret) -
             deletions: Vec::new(),
             original_paths: Default::default(),
         };
-        let mut root = new_group(name, 48);
-        let mut info = new_group("ID_info", 9);
+        let mut container = new_group("Root", 48);
+        let mut root = new_group(PROJECT_ROOT, 48);
+        root.set_meta("ID.Group", "root");
+        let mut info = new_group(INFO_GROUP, 9);
         info.set_meta("ID.Group", "info");
         root.children.push(info);
-        doc.root.child_mut("Root").unwrap().children.push(root);
+        container.children.push(root);
+        doc.root.child_mut("Root").unwrap().children.push(container);
         let id = doc.add(name, "info", 9)?;
         let entry = doc.entry_mut(&id)?;
         entry.set_field("身份名", name, false);
@@ -240,15 +249,18 @@ pub(crate) fn create(path: &Path, name: &str, password: &crate::vault::Secret) -
         let entries = actual.entries();
         ensure!(
             entries.len() == 1
-                && entries[0].0 == format!("ID_info/{name}")
+                && entries[0].0 == format!("{PROJECT_ROOT}/{INFO_GROUP}/{name}")
                 && entries[0].1.value("UUID") == id
                 && entries[0].1.meta("ID.Kind") == "info"
                 && entries[0].1.field_value("身份名") == name
                 && entries[0].1.field_value("Password").is_empty()
+                && actual.groups().iter().any(|(p, g)| {
+                    p == &format!("{PROJECT_ROOT}/{INFO_GROUP}") && g.meta("ID.Group") == "info"
+                })
                 && actual
                     .groups()
                     .iter()
-                    .any(|(p, g)| p == "ID_info" && g.meta("ID.Group") == "info"),
+                    .any(|(p, g)| { p == PROJECT_ROOT && g.meta("ID.Group") == "root" }),
             "新库初始化校验失败，未发布密码库"
         );
         fs::File::open(&staged)?.sync_all()?;
@@ -406,80 +418,178 @@ impl Document {
             .context("密码库缺少根分组")?;
         remove(root, kind, uuid).context("原分组或条目不存在")
     }
-    pub fn organize(&mut self, identity: &str) -> Result<usize> {
-        let info = crate::store::information_id(self)?;
-        let groups = self.groups();
-        let marked = groups
-            .iter()
-            .filter(|(_, g)| g.meta("ID.Group") == "info")
-            .collect::<Vec<_>>();
-        let targets = groups
-            .iter()
-            .filter(|(p, _)| p == "ID_info")
+
+    fn root_container_mut(&mut self) -> Result<&mut Node> {
+        self.root
+            .child_mut("Root")
+            .and_then(|root| root.child_mut("Group"))
+            .context("密码库缺少根分组")
+    }
+
+    fn group_selection(&self, role: &str, names: &[&str]) -> Result<Option<(String, String)>> {
+        let marked = self
+            .groups()
+            .into_iter()
+            .filter(|(_, group)| group.meta("ID.Group") == role)
+            .map(|(path, group)| (path, group.value("UUID").to_owned()))
             .collect::<Vec<_>>();
         ensure!(
-            marked.len() <= 1 && targets.len() <= 1,
-            "基础信息群组标记或路径重复，原库保留"
+            marked.len() <= 1,
+            "项目分组标记重复，请先在 KeePassXC 中整理"
         );
-        let existing = marked
-            .first()
-            .or_else(|| targets.first())
-            .map(|(p, g)| (p.to_owned(), g.value("UUID").to_owned()));
-        if let (Some((_, g)), Some(target)) = (&existing, targets.first()) {
-            ensure!(
-                g == target.1.value("UUID"),
-                "目标群组 ID_info 已存在，原库保留，请在 KeePassXC 核对"
-            );
+        let named = self
+            .groups()
+            .into_iter()
+            .filter(|(path, _)| names.iter().any(|name| path == name))
+            .map(|(path, group)| (path, group.value("UUID").to_owned()))
+            .collect::<Vec<_>>();
+        ensure!(
+            named.len() <= 1,
+            "项目分组路径重复，请先在 KeePassXC 中整理"
+        );
+        if let (Some(marked), Some(named)) = (marked.first(), named.first()) {
+            ensure!(marked.1 == named.1, "项目分组标记与路径冲突，原库保留");
         }
-        let mut changed = false;
-        let group = if let Some((path, uuid)) = existing {
-            self.group_mut(&uuid)?;
-            if path != "ID_info" {
-                let mut group = self.take("Group", &uuid)?;
-                group.set("Name", "ID_info");
-                group.relocate()?;
-                self.root
-                    .child_mut("Root")
-                    .unwrap()
-                    .child_mut("Group")
-                    .unwrap()
-                    .children
-                    .push(group);
+        Ok(marked.first().cloned().or_else(|| named.first().cloned()))
+    }
+
+    fn canonical_root(&mut self) -> Result<(String, bool)> {
+        let selected = self.group_selection("root", &[PROJECT_ROOT, "Passwords/ID"])?;
+        let (uuid, mut changed) = if let Some((path, uuid)) = selected {
+            ensure!(
+                self.groups()
+                    .into_iter()
+                    .find(|(_, group)| group.value("UUID") == uuid)
+                    .is_some_and(|(_, group)| group.meta("ID.Group").is_empty()
+                        || group.meta("ID.Group") == "root"),
+                "ID 目标群组已用于其他资料，原库保留"
+            );
+            (uuid, path != PROJECT_ROOT)
+        } else {
+            let mut root = new_group(PROJECT_ROOT, 48);
+            root.set_meta("ID.Group", "root");
+            let uuid = root.value("UUID").to_owned();
+            self.root_container_mut()?.children.push(root);
+            (uuid, true)
+        };
+        if changed {
+            let mut root = self.take("Group", &uuid)?;
+            root.set("Name", PROJECT_ROOT);
+            root.set_meta("ID.Group", "root");
+            root.relocate()?;
+            self.root_container_mut()?.children.push(root);
+        } else {
+            let root = self.group_mut(&uuid)?;
+            if root.meta("ID.Group") != "root" {
+                root.set_meta("ID.Group", "root");
+                root.touch();
                 changed = true;
             }
-            let group = self.group_mut(&uuid)?;
+            if root.value("Name") != PROJECT_ROOT {
+                root.set("Name", PROJECT_ROOT);
+                root.relocate()?;
+                changed = true;
+            }
+        }
+        Ok((uuid, changed))
+    }
+
+    fn canonical_child(
+        &mut self,
+        parent: &str,
+        role: &str,
+        name: &str,
+        legacy: &[&str],
+        icon: u32,
+    ) -> Result<(String, bool)> {
+        let target = format!("{PROJECT_ROOT}/{name}");
+        let mut candidates = vec![target.as_str()];
+        candidates.extend_from_slice(legacy);
+        let selected = self.group_selection(role, &candidates)?;
+        let (uuid, mut changed) = if let Some((path, uuid)) = selected {
+            let group = self
+                .groups()
+                .into_iter()
+                .find(|(_, group)| group.value("UUID") == uuid)
+                .map(|(_, group)| group)
+                .context("项目分组不存在")?;
             ensure!(
-                group.meta("ID.Group").is_empty() || group.meta("ID.Group") == "info",
+                group.meta("ID.Group").is_empty() || group.meta("ID.Group") == role,
                 "目标群组已用于其他资料，原库保留"
             );
-            if group.meta("ID.Group") != "info" {
-                ensure!(
-                    group
-                        .children
-                        .iter()
-                        .filter(|n| n.name == "Entry" || n.name == "Group")
-                        .all(|e| e.name == "Entry" && info.as_deref() == Some(e.value("UUID"))),
-                    "ID_info 含未关联资料，原库保留，请先在 KeePassXC 核对"
-                );
-                group.set_meta("ID.Group", "info");
+            (uuid, path != target)
+        } else {
+            let mut group = new_group(name, icon);
+            group.set_meta("ID.Group", role);
+            let uuid = group.value("UUID").to_owned();
+            self.group_mut(parent)?.children.push(group);
+            (uuid, true)
+        };
+        if changed {
+            if let Some((_, other)) = self.groups().into_iter().find(|(path, _)| path == &target) {
+                ensure!(other.value("UUID") == uuid, "目标群组路径冲突，原库保留");
+            }
+            let mut group = self.take("Group", &uuid)?;
+            group.set("Name", name);
+            group.set_meta("ID.Group", role);
+            group.relocate()?;
+            self.group_mut(parent)?.children.push(group);
+        } else {
+            let group = self.group_mut(&uuid)?;
+            if group.meta("ID.Group") != role {
+                group.set_meta("ID.Group", role);
                 group.touch();
                 changed = true;
             }
-            uuid
-        } else {
-            let mut group = new_group("ID_info", 9);
-            group.set_meta("ID.Group", "info");
-            let uuid = group.value("UUID").to_owned();
-            self.root
-                .child_mut("Root")
-                .and_then(|r| r.child_mut("Group"))
-                .context("密码库缺少根分组")?
-                .children
-                .push(group);
-            changed = true;
-            uuid
-        };
-        let target = format!("ID_info/{identity}");
+        }
+        Ok((uuid, changed))
+    }
+
+    pub fn organize(&mut self, identity: &str) -> Result<usize> {
+        let info = crate::store::information_id(self)?;
+        let (root, root_changed) = self.canonical_root()?;
+        let (info_group, info_changed) = self.canonical_child(
+            &root,
+            "info",
+            INFO_GROUP,
+            &[
+                "ID_info",
+                "Passwords/ID_info",
+                "ID/身份信息",
+                "ID/身份信息/基础信息",
+                "Passwords/ID/身份信息",
+            ],
+            9,
+        )?;
+        let (_, account_changed) = self.canonical_child(
+            &root,
+            "account",
+            ACCOUNT_GROUP,
+            &["ID/账号", "ID/Accounts", "Passwords/ID/账号"],
+            48,
+        )?;
+        let (_, event_changed) = self.canonical_child(
+            &root,
+            "event",
+            EVENT_GROUP,
+            &["ID/事件", "ID/Events", "Passwords/ID/事件"],
+            22,
+        )?;
+        let (_, email_changed) = self.canonical_child(
+            &root,
+            "email",
+            EMAIL_GROUP,
+            &[
+                "ID_emails",
+                "Passwords/ID_emails",
+                "ID/邮箱",
+                "Passwords/ID/邮箱",
+            ],
+            19,
+        )?;
+        let mut changed =
+            root_changed || info_changed || account_changed || event_changed || email_changed;
+        let target = format!("{PROJECT_ROOT}/{INFO_GROUP}/{identity}");
         let at_target = self.find_path(&target)?;
         ensure!(
             at_target.is_none() || at_target == info,
@@ -503,7 +613,7 @@ impl Document {
             let protected_title = entry.field("Title").is_some_and(protected);
             entry.set_field("Title", identity, protected_title);
             entry.relocate()?;
-            self.group_mut(&group)?.children.push(entry);
+            self.group_mut(&info_group)?.children.push(entry);
             changed = true;
         }
         let entry = self.entry_mut(&id)?;
@@ -522,7 +632,11 @@ impl Document {
         let email_groups = self
             .groups()
             .into_iter()
-            .filter(|(path, g)| g.meta("ID.Group") == "email" || path == "ID_emails")
+            .filter(|(path, group)| {
+                group.meta("ID.Group") == "email"
+                    || path == EMAIL_GROUP
+                    || path == &format!("{PROJECT_ROOT}/{EMAIL_GROUP}")
+            })
             .map(|(path, _)| path)
             .collect::<Vec<_>>();
         let emails = self
@@ -689,25 +803,21 @@ impl Document {
                     || self
                         .groups()
                         .iter()
-                        .all(|(path, g)| path != "ID_emails" || g.value("UUID") == id),
-                "目标群组 ID_emails 已存在，请先核对邮箱群组"
+                        .all(|(path, g)| { path != EMAIL_GROUP || g.value("UUID") == id }),
+                "目标邮箱群组已存在，请先核对"
             );
             return Ok(id.clone());
         }
         let (name, icon) = match role {
-            "root" => ("ID", 48),
-            "info" => ("身份信息", 9),
-            "account" => ("账号", 48),
-            "event" => ("事件", 22),
-            "email" => ("ID_emails", 19),
+            "root" => (PROJECT_ROOT, 48),
+            "info" => (INFO_GROUP, 9),
+            "account" => (ACCOUNT_GROUP, 48),
+            "event" => (EVENT_GROUP, 22),
+            "email" => (EMAIL_GROUP, 19),
             _ => anyhow::bail!("不支持的条目类型"),
         };
-        let parent = if matches!(role, "root" | "email") {
-            let root = self
-                .root
-                .child_mut("Root")
-                .and_then(|r| r.child_mut("Group"))
-                .context("密码库缺少根分组")?;
+        let parent = if role == "root" {
+            let root = self.root_container_mut()?;
             if root.value("UUID").is_empty() {
                 root.set("UUID", &STANDARD.encode(rand::random::<[u8; 16]>()));
             }
@@ -738,7 +848,7 @@ impl Document {
                     .children
                     .iter()
                     .any(|e| e.name == "Entry" && matches!(e.meta("ID.Kind"), "info" | "event")),
-            "ID_emails 含其他类型条目，请先核对群组"
+            "邮箱群组含基础信息或事件条目，请先核对"
         );
         group.set_meta("ID.Group", role);
         group.touch();
@@ -1267,7 +1377,11 @@ mod tests {
                 .iter()
                 .map(|(p, _)| p.as_str())
                 .collect::<Vec<_>>(),
-            ["ID/身份信息/基础信息", "ID/账号/GitHub", "ID/事件/注册"]
+            [
+                "ID/ID_info/基础信息",
+                "ID/ID_account/GitHub",
+                "ID/ID_events/注册",
+            ]
         );
         let id = d.managed_group("account").unwrap();
         d.group_mut(&id).unwrap().set("Name", "Accounts");
@@ -1289,5 +1403,52 @@ mod tests {
             .children
             .push(duplicate);
         assert!(d.add("Unsafe", "account", 1).is_err());
+    }
+
+    #[test]
+    fn organize_moves_nested_project_root_to_first_level_and_keeps_passwords() {
+        let xml = br#"
+            <KeePassFile><Root><Group><UUID>container</UUID><Name>Root</Name>
+              <Group><UUID>passwords</UUID><Name>Passwords</Name>
+                <Group><UUID>project</UUID><Name>ID</Name>
+                  <CustomData><Item><Key>ID.Group</Key><Value>root</Value></Item></CustomData>
+                  <Group><UUID>info</UUID><Name>ID_info</Name>
+                    <CustomData><Item><Key>ID.Group</Key><Value>info</Value></Item></CustomData>
+                    <Entry><UUID>identity</UUID>
+                      <String><Key>Title</Key><Value>alice</Value></String>
+                      <String><Key>Password</Key><Value ProtectInMemory="True"/></String>
+                      <CustomData><Item><Key>ID.Kind</Key><Value>info</Value></Item></CustomData>
+                    </Entry>
+                  </Group>
+                </Group>
+              </Group>
+              <Group><UUID>keep</UUID><Name>Personal</Name></Group>
+            </Group></Root></KeePassFile>
+        "#;
+        let mut doc = Document {
+            root: parse(xml).unwrap(),
+            fingerprint: [0; 32],
+            deletions: Vec::new(),
+            original_paths: Default::default(),
+        };
+        let count = doc.organize("alice").unwrap();
+        assert!(count > 0);
+        let project = doc
+            .groups()
+            .into_iter()
+            .find(|(path, group)| path == PROJECT_ROOT && group.value("UUID") == "project");
+        assert!(project.is_some());
+        assert!(
+            doc.groups()
+                .iter()
+                .any(|(path, group)| path == "Passwords" && group.value("UUID") == "passwords")
+        );
+        assert!(
+            doc.groups()
+                .iter()
+                .any(|(path, group)| path == "Personal" && group.value("UUID") == "keep")
+        );
+        assert!(doc.find_path("ID/ID_info/alice").unwrap().is_some());
+        assert!(doc.groups().iter().any(|(path, _)| path == "ID/ID_account"));
     }
 }

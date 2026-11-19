@@ -6,8 +6,9 @@
 # Turso 连接信息（含 token）。也在 .stignore 里，不进 Syncthing。
 .turso.env
 
-# 身份数据归 Syncthing（见 .stignore），整棵目录不进 git
-identities/
+# 身份数据归 Syncthing（见 .stignore）；只跟踪目录说明，KDBX 永不入库
+/identities/*
+!/identities/README.md
 
 # 真实配置（初始密码、API key）。模板 .env.example 反而要入库
 .env

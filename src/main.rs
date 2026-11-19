@@ -32,7 +32,7 @@ struct Entry {
 }
 #[derive(Subcommand)]
 enum Commands {
-    /// 整理基础信息、ID_emails 邮箱群组与本项目旧根条目
+    /// 将项目群组统一整理到第一层 ID
     Organize {
         #[command(flatten)]
         identity: Identity,
@@ -51,7 +51,7 @@ enum Commands {
     Manage {
         #[command(flatten)]
         identity: Identity,
-        #[arg(long="type",env="ID_LIST_TYPE",default_value="all",value_parser=["all","account","password","info"])]
+        #[arg(long="type",env="ID_LIST_TYPE",default_value="all",value_parser=["all","account","email","password","info"])]
         view: String,
         #[arg(long = "cat", env = "ID_LIST_CATEGORY", default_value = "")]
         category: String,

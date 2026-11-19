@@ -186,6 +186,7 @@ impl Browser {
                     [
                         ("all", "全部"),
                         ("account", "账号"),
+                        ("email", "邮箱"),
                         ("password", "密码"),
                         ("info", "个人信息"),
                     ]
@@ -236,7 +237,7 @@ impl Browser {
                 } else {
                     ui::color(
                         &ui::clip(
-                            "1 全部  2 账号  3 密码  4 信息  n 新增  d 维度  r 刷新  l 锁定  q 退出",
+                            "1 全部  2 账号  3 邮箱  4 密码  5 信息  n 新增  d 维度  r 刷新  l 锁定  q 退出",
                             width,
                         ),
                         "2",
@@ -252,12 +253,13 @@ impl Browser {
                 self.page = self.page.min(pages.len() - 1);
                 let current = &records[pages[self.page].clone()];
                 match k.code {
-                    KeyCode::Char(c @ '1'..='4') => {
+                    KeyCode::Char(c @ '1'..='5') => {
                         self.page = 0;
                         self.selected = 0;
                         self.expanded = false;
                         return Ok(Action::Filter(
-                            ["all", "account", "password", "info"][(c as u8 - b'1') as usize]
+                            ["all", "account", "email", "password", "info"]
+                                [(c as u8 - b'1') as usize]
                                 .into(),
                         ));
                     }
@@ -468,7 +470,7 @@ pub fn manage(
                         }
                         'm' if item.category == "account"
                             && ui::confirm(
-                                "归为邮箱并移入 ID_emails？保留已有密码、字段与附件。",
+                                "归为邮箱并移入 ID/ID_emails？保留已有密码、字段与附件。",
                             )? =>
                         {
                             store.email(&item.id)?
@@ -680,6 +682,19 @@ fn edit_field(store: &Store, item: &Item, key: Option<&str>) -> Result<()> {
     let note = keep(note, existing.map(|f| f.note.as_str()).unwrap_or(""));
     store.field(&item.id, &key, value, secret, &category, &note)
 }
+pub fn import_attachment(store: &Store, title: &str) -> Result<()> {
+    let matches = store
+        .items(store.identity)?
+        .into_iter()
+        .filter(|item| item.category == "account" && (item.path == title || item.key == title))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        matches.len() == 1,
+        "找不到唯一的账号条目，请先确认完整标题或在管理界面选择"
+    );
+    attachment(store, &matches[0], true)
+}
+
 fn attachment(store: &Store, item: &Item, import: bool) -> Result<()> {
     use crate::kdbx;
     let source = if import {

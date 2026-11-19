@@ -78,7 +78,7 @@ $(BIN): Cargo.toml Cargo.lock $(wildcard src/*.rs)
 
 ##@ 日常使用
 
-manage: $(BIN) ## 管理账号、密码、资料与附件；type=all/account/password/info，cat=维度
+manage: $(BIN) ## 管理账号、密码、资料与附件；type=all/account/email/password/info，cat=维度
 	@$(BIN) manage
 
 ai: $(BIN) ## 全屏 AI 助手；file=非机密资料文件
@@ -115,7 +115,7 @@ doctor: $(BIN) ## 检查 identities 异常；id=身份，fix=1 确认后归档�
 backup: $(BIN) ## 备份各身份加密密码库到 backups/vaults/
 	@$(BIN) backup
 
-organize: $(BIN) ## 整理 ID_info/身份名、ID_emails 与旧项目根条目（id=gene）
+organize: $(BIN) ## 将项目群组整理到 ID/ID_info、ID_account、ID_emails、ID_events（id=gene）
 	@$(BIN) organize
 
 clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板

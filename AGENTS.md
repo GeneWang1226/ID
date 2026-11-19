@@ -1,4 +1,46 @@
-# AGENTS.md — 给 AI 助手的全局指引
+# 全局规范 (Main)
+
+> 系统指令：极简响应，最大化 Token 效率。严禁寒暄、逻辑推演铺垫与冗余总结。直达最终代码或结果。
+
+✏️LANGUAGE
+默认使用语言：中文
+
+## 1. AGENT规范结构层级
+
+- Main（全局基准）：本文档，定义通用底座规则。
+- Local/Override（项目覆盖）：项目根目录下的规范文件，特定规则优先级高于 Main。
+
+## 2. 代码风格
+
+- 极致纯净：除非显式要求，严格杜绝一切冗余或机械化注释，代码须完全自解释。
+- 工程规范：遵循通用开发最佳实践，遵守下文的Git 规约以及开发日志。
+
+## 3. Git 规约
+
+- 身份默认：Name: Jacob​, Email: [jacob_ng@163.com](mailto:jacob_ng@163.com)​。
+- 版本 Tag：固定以小写 v​ 开头。修饰词（dev​/alpha​/beta​ 等）前禁止加连字符（如：v1.0.0dev​, v1.2.0alpha1​）。
+- 历史纯净：遵循语义化提交规范（如 feat:​, fix:​），合理压缩（Squash）细碎提交，保持分支历史整洁、线形与规范。
+- 分支隔离：严禁直接在 main​ 分支上开发。若检测到当前处于 main​ 分支，须主动告知用户并确认意图。
+- Commit 信息：语言须与当前规范的默认使用语言一致。
+- Git 操作权限：除 git commit​、add​、status​、diff​、log​ 等本地/只读简单操作允许自行处理外，merge​、rebase​、reset​、push​、force push​、分支删除/重命名、tag​ 操作等必须先向用户确认，除非用户已给出明确指示或计划。
+
+## 4. 开发日志
+
+- 严格遵守 Changelog 规范。项目的所有重要变更、版本迭代、新特性及修复均须记录在根目录下的 [CHANGELOG.md](http://CHANGELOG.md)​ 文件中。
+
+​[CHANGELOG.md](http://CHANGELOG.md)​ 头部格式统一采用如下结构：
+
+```markdown
+# 更新日志
+
+本项目所有重要变更都会记录在此文件中。
+
+格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+并遵循 [语义化版本](https://semver.org/lang/zh-CN/spec/v2.0.0.html)。
+
+```
+
+# 项目规范（Override）
 
 这个目录（`~/ID`）存放**多个身份的敏感信息**。任何 AI 助手在这里工作时，必须先读完本文件再动手。
 
@@ -17,7 +59,7 @@
 4. **不动模板**：除非用户明确要求，否则 `template/` 只读。
 5. **最小访问**：只读与当前任务直接相关的文件，不要漫无目的地翻身份目录。
 6. **日志红线**：`logs/scripts.log` 只记「什么时间做了什么操作」，绝不写入密码、token、秘密内容。身份的大事记作为事件条目存入该身份 KDBX，不写日志文件。
-7. **git 只跟踪项目，不跟踪秘密**：仓库用来把源码、模板和文档部署到新设备。`identities/`、`docker/.env`、`config/secrets/.secrets.env`、`*.kdbx`、`.turso.env`、`logs/`、`exports/` 永不入库（模板 `docker/.env.example`、`config/secrets/.secrets.env.example` 和非敏感 `config/config.toml` 要入库），禁止 `git add -f`。除非用户明确要求，不要 `git commit` 或推远程。不要改 git config。身份文件的历史靠 Syncthing，不靠 git。
+7. **git 只跟踪项目，不跟踪秘密**：仓库用来把源码、模板和文档部署到新设备。仅 `identities/README.md` 可入库；`identities/` 中的其他内容、`docker/.env`、`config/secrets/.secrets.env`、`*.kdbx`、`.turso.env`、`logs/`、`exports/` 永不入库（模板 `docker/.env.example`、`config/secrets/.secrets.env.example` 和非敏感 `config/config.toml` 要入库），禁止 `git add -f`。除非用户明确要求，不要 `git commit` 或推远程。不要改 git config。身份文件的历史靠 Syncthing，不靠 git。
 8. **AI 不碰明文密码**：AI 需要密码时，只能请用户运行 `make grant id=<身份> title=<条目>` 签发临时凭证，然后用 `make use token=<token> cmd='...'` 代执行（密码经 `$ID_SECRET` 注入子进程）。禁止读 `/run/user/*/id-grants/` 下的任何文件，禁止打印/回显 `$ID_SECRET`，禁止把密码拼进命令行参数（argv 会进进程列表）。网页表单等代执行够不到的场景，请用户 `make pass` 复制剪贴板后手动粘贴。
 
 当前存储约定覆盖旧身份模板中的 SQLite、Turso、档案和零散笔记写入指引；旧文件只保留供人工迁移，不再作为日常资料存储。
@@ -33,12 +75,12 @@
 | 让 AI 用密码干活 | 请用户 `make grant` 签发临时凭证，AI 只拿 token 用 `make use` 代执行；条目 Tags 分级：`ai-auto` 限时多次、无标签一次性、`ai-deny` 禁止 |
 | 存/查非机密个人信息 | 通过本地 CLI 存入当前身份 KDBX 的“基础信息”原生字段；账号为独立条目，机密字段必须受保护 |
 | 改 CLI | 修改 `src/`，运行 `make test`；测试只使用临时构造的身份和密码库 |
-| 安装依赖、改主密码等维护操作 | 按 `docs/MAINTENANCE.md` 执行 |
+| 安装依赖、改主密码等维护操作 | 按 `docs/zh-CN/MAINTENANCE.md` 执行 |
 
 ## 用户习惯
 
 - 用户说中文（简体），回复也用中文。
 - 所有身份资料统一保存在各自 KeePass（`.kdbx`）；新建身份在原生 `ID_info` 群组中创建以身份名命名的基础信息条目，账号与密码为同一条目。日常编辑兼容旧群组，通过 UUID 和 CustomData 识别。用户显式运行 `make organize` 并本地解锁、确认后，基础信息才统一为 `ID_info/<身份名>`，同时整理旧项目根条目；保留原 UUID、字段保护、密码、附件和历史，其他用户群组不搬动。SQLite 只允许由用户显式迁移，原文件不得擅自删除。
-- 维护方法都记录在 `docs/MAINTENANCE.md`，别凭记忆瞎猜命令。
+- 维护方法都记录在 `docs/zh-CN/MAINTENANCE.md`，别凭记忆瞎猜命令。
 - 邮箱账号独立使用原生 `ID_emails` 群组（`ID.Group=email`），条目保持 `ID.Kind=account`，增加 `ID.AccountType=email`。常用资料使用独立属性，恢复码、恢复短语、授权码和应用密码受保护。整理仅根据明确邮箱类型、邮箱导入记录或项目已知邮箱服务商属性，不因为网站用邮箱登录就把它移为邮箱；归一化补充字段时保留原字段，冲突不覆盖。
 - 后续计划接入 Syncthing 同步和定期备份，相关实现放 `src/`。
