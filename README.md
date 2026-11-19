@@ -57,7 +57,7 @@ Accounts and passwords share one native entry. Recovery codes, API keys, and sim
 
 KeePassXC performs KDBX encryption and merging. ID keeps exported XML in Linux anonymous memory, writes through a temporary encrypted transaction, verifies the result, and leaves an encrypted backup before replacement. It never sends passwords, master passwords, protected values, or attachment contents to AI services.
 
-Do not open the same vault for editing on two devices at once. Wait for Syncthing to finish before switching devices. See the maintenance guide for conflict handling and backups.
+For Syncthing, use the project directory `ID/` as the sync folder so the root `.stignore` applies. Do not open the same vault for editing on two devices at once. Wait for Syncthing to finish before switching devices. See the maintenance guide for conflict handling and backups.
 
 ## Documentation
 
@@ -79,7 +79,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-Identity vaults, backups, logs, exports, and secret configuration are local data and are excluded from Git.
+Identity vaults, backups, logs, exports, and secret configuration are local data and are excluded from Git. Git tracks only `identities/README.md` as a guide; all KDBX files remain ignored.
 
 ## License
 

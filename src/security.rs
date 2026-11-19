@@ -3,9 +3,10 @@ use anyhow::{Context, Result, ensure};
 use std::{collections::HashSet, fs, path::Path, process::Command};
 
 fn forbidden(path: &str) -> bool {
-    ["identities/", "backups/", "logs/", "exports/"]
+    (["identities/", "backups/", "logs/", "exports/"]
         .iter()
         .any(|p| path.starts_with(p))
+        && path != "identities/README.md")
         || path.ends_with(".kdbx")
         || path.ends_with(".turso.env")
         || matches!(
@@ -91,7 +92,7 @@ pub fn check(project: &Project) -> Result<()> {
         "Git 正在追踪禁止入库的路径"
     );
     for path in [
-        "identities",
+        "identities/example.kdbx",
         "backups",
         "logs",
         "data/id.db",
@@ -179,6 +180,7 @@ mod tests {
         ] {
             assert!(forbidden(p));
         }
+        assert!(!forbidden("identities/README.md"));
         for p in ["config/config.toml", "docker/.env.example", "Cargo.lock"] {
             assert!(!forbidden(p));
         }

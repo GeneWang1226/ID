@@ -9,6 +9,7 @@
 
 ## 未发布
 
+- Track `identities/README.md` as a safe guide while continuing to exclude all KDBX files; document using the project root `ID/` as the Syncthing folder.
 - Added the project tagline: “Helping you manage your many identities, elegantly.”
 - Clarified the project identity as a multi-identity manager in the README and repository description.
 - Added an MIT license, a concise English README, an English documentation set, and a categorized Chinese documentation set under `docs/`.
