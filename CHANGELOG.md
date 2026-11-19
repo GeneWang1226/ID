@@ -9,6 +9,7 @@
 
 ## 未发布
 
+- Clarified the project identity as a multi-identity manager in the README and repository description.
 - Added an MIT license, a concise English README, an English documentation set, and a categorized Chinese documentation set under `docs/`.
 - 统一 KDBX 项目结构为第一层 `ID` 及其 `ID_info`、`ID_account`、`ID_emails`、`ID_events` 子群组；`make organize` 可迁移旧路径和 `Passwords/ID`，保留 UUID、密码、受保护字段、附件与历史，冲突时中止且不删除空群组。
 - 新建身份直接创建 `ID/ID_info/<身份名>`；查询、邮箱归类、事件保存和 TUI 路径统一使用新标记。KeePassXC-Browser 的新凭据保存组由用户手动设为 `ID/ID_account`，项目不修改插件配置。

@@ -1,10 +1,11 @@
 # ID
 
-ID is a local-first identity manager for the terminal. It provides a Rust TUI around KeePassXC, keeps each identity in its own KDBX vault, and works with Syncthing for encrypted multi-device storage.
+ID is a local-first identity manager for people who manage multiple identities. Its Rust TUI keeps each identity in an independent KeePassXC KDBX vault, with accounts, profiles, credentials, and events organized per identity and synchronized safely across devices.
 
 ## Highlights
 
-- One encrypted KDBX vault per identity.
+- One isolated encrypted KDBX vault per identity.
+- A single terminal workflow for switching between personal, work, project, and other identities.
 - Native KeePass groups and entries for accounts, email, profile data, events, custom fields, and attachments.
 - Full-screen terminal UI with local password and protected-field operations.
 - Optional local AI assistance that receives metadata only; passwords and protected values stay local.
