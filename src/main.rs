@@ -51,7 +51,7 @@ enum Commands {
     Manage {
         #[command(flatten)]
         identity: Identity,
-        #[arg(long="type",env="ID_LIST_TYPE",default_value="all",value_parser=["all","account","email","password","info"])]
+        #[arg(long="type",env="ID_LIST_TYPE",default_value="all",value_parser=["all","account","contact","email","password","info"])]
         view: String,
         #[arg(long = "cat", env = "ID_LIST_CATEGORY", default_value = "")]
         category: String,
@@ -189,7 +189,12 @@ fn execute(cli: Cli, handoff: &mut Option<syncthing::Handoff>) -> Result<()> {
     let session = Session::default();
     match cli.command {
         Commands::New { identity } => {
-            let name = ask(identity.id, "新身份名: ")?;
+            let prompt = if config::Config::load(&project)?.ui.language == "en" {
+                "Identity name: "
+            } else {
+                "新身份名: "
+            };
+            let name = ask(identity.id, prompt)?;
             maintenance::new_identity(&project, &name)?;
         }
         Commands::Remove { identity } => {

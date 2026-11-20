@@ -7,23 +7,25 @@ ID currently targets Linux and needs Rust 1.89+, GNU Make, and `keepassxc-cli`. 
 ## Create and open an identity
 
 ```sh
+make settings                 # choose 中文 or English
 make new id=example
-make manage id=example
+make ai id=example
 ```
 
-Each identity has an independent master password. New vaults contain the native group `ID/ID_info/example`. Use the full-screen TUI to add accounts, profile fields, email accounts, events, protected fields, and attachments.
+Each identity has an independent master password. New vaults put `ID` at the first level and pre-create `ID_info`, `ID_contacts`, `ID_account`, `ID_emails`, and `ID_events`. `ID_info` includes profile, education, work, address, vehicle, and health entries with reusable fields. The language setting controls the AI response language; the TUI keeps the same safe local workflow in either language.
 
 ## Native vault layout
 
 ```text
 ID/
 ├── ID_info
+├── ID_contacts
 ├── ID_account
 ├── ID_emails
 └── ID_events
 ```
 
-Accounts and passwords are stored in the same entry. Recovery codes and API keys use protected custom fields. Attachments stay with their KeePass entry. `Passwords` is an optional user group, not a project requirement.
+Accounts and passwords are stored in the same entry. Phone numbers are separate contact entries so multiple numbers can be recorded. Recovery codes and API keys use protected custom fields. Attachments stay with their KeePass entry. `Passwords` is an optional user group, not a project requirement.
 
 Set the KeePassXC-Browser new-credentials group to `ID/ID_account` in the extension settings. ID does not change browser-plugin configuration.
 

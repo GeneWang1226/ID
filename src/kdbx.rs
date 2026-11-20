@@ -176,6 +176,7 @@ fn new_group(name: &str, icon: u32) -> Node {
 
 const PROJECT_ROOT: &str = "ID";
 const INFO_GROUP: &str = "ID_info";
+const CONTACT_GROUP: &str = "ID_contacts";
 const ACCOUNT_GROUP: &str = "ID_account";
 const EMAIL_GROUP: &str = "ID_emails";
 const EVENT_GROUP: &str = "ID_events";
@@ -194,10 +195,15 @@ fn xml_input(xml: &[u8]) -> Result<(fs::File, PathBuf)> {
     Ok((memory, input))
 }
 
-pub(crate) fn create(path: &Path, name: &str, password: &crate::vault::Secret) -> Result<()> {
+pub(crate) fn create(
+    path: &Path,
+    name: &str,
+    password: &crate::vault::Secret,
+    language: &str,
+) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (path, name, password);
+        let _ = (path, name, password, language);
         anyhow::bail!("当前平台尚不支持安全初始化，请在 Linux 创建密码库");
     }
     #[cfg(target_os = "linux")]
@@ -211,20 +217,246 @@ pub(crate) fn create(path: &Path, name: &str, password: &crate::vault::Secret) -
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
-        let mut container = new_group("Root", 48);
         let mut root = new_group(PROJECT_ROOT, 48);
         root.set_meta("ID.Group", "root");
         let mut info = new_group(INFO_GROUP, 9);
         info.set_meta("ID.Group", "info");
+        let mut contacts = new_group(CONTACT_GROUP, 5);
+        contacts.set_meta("ID.Group", "contact");
+        let mut accounts = new_group(ACCOUNT_GROUP, 48);
+        accounts.set_meta("ID.Group", "account");
+        let mut emails = new_group(EMAIL_GROUP, 19);
+        emails.set_meta("ID.Group", "email");
+        let mut events = new_group(EVENT_GROUP, 22);
+        events.set_meta("ID.Group", "event");
         root.children.push(info);
-        container.children.push(root);
-        doc.root.child_mut("Root").unwrap().children.push(container);
-        let id = doc.add(name, "info", 9)?;
+        root.children.extend([contacts, accounts, emails, events]);
+        doc.root.child_mut("Root").unwrap().children.push(root);
+        let english = language == "en";
+        let profile_title = if english {
+            "Identity profile"
+        } else {
+            "身份档案"
+        };
+        let id = doc.add(profile_title, "info", 9)?;
         let entry = doc.entry_mut(&id)?;
-        entry.set_field("身份名", name, false);
-        entry.set_meta("ID.Category:身份名", "id-info");
+        entry.set_meta("ID.InfoType", "profile");
+        let profile_fields = if english {
+            [
+                "Identity name",
+                "Name",
+                "English name",
+                "Nickname",
+                "Birthday",
+                "Nationality",
+                "Document type",
+                "Document number",
+                "City",
+                "Time zone",
+                "Personal notes",
+            ]
+        } else {
+            [
+                "身份名",
+                "姓名",
+                "英文名",
+                "昵称",
+                "生日",
+                "国籍",
+                "证件类型",
+                "证件号码",
+                "常住城市",
+                "时区",
+                "个人备注",
+            ]
+        };
+        entry.set_meta("ID.IdentityNameField", profile_fields[0]);
+        for (index, key) in profile_fields.into_iter().enumerate() {
+            let value = if index == 0 { name } else { "" };
+            let protected = index == 7;
+            entry.set_field(key, value, protected);
+            entry.set_meta(&format!("ID.Category:{key}"), "id-info");
+        }
         entry.touch();
+        let dimensions = if english {
+            [
+                (
+                    "Education",
+                    "education",
+                    [
+                        "School",
+                        "Degree",
+                        "Major",
+                        "Start date",
+                        "End date",
+                        "Location",
+                        "Notes",
+                    ],
+                ),
+                (
+                    "Work history",
+                    "work",
+                    [
+                        "Company",
+                        "Role",
+                        "Department",
+                        "Start date",
+                        "End date",
+                        "Location",
+                        "Notes",
+                    ],
+                ),
+                (
+                    "Address",
+                    "address",
+                    [
+                        "Type",
+                        "Country/region",
+                        "State/province",
+                        "City",
+                        "Address",
+                        "Postal code",
+                        "Notes",
+                    ],
+                ),
+                (
+                    "Vehicle",
+                    "vehicle",
+                    [
+                        "Make",
+                        "Model",
+                        "License plate",
+                        "VIN",
+                        "Purchase date",
+                        "Insurance expiry",
+                        "Notes",
+                    ],
+                ),
+                (
+                    "Health",
+                    "health",
+                    [
+                        "Blood type",
+                        "Allergies",
+                        "Emergency contact",
+                        "Notes",
+                        "Medical notes",
+                        "Insurance",
+                        "Medication",
+                    ],
+                ),
+            ]
+        } else {
+            [
+                (
+                    "教育经历",
+                    "education",
+                    [
+                        "学校",
+                        "学历",
+                        "专业",
+                        "开始时间",
+                        "结束时间",
+                        "所在地",
+                        "备注",
+                    ],
+                ),
+                (
+                    "工作经历",
+                    "work",
+                    [
+                        "公司",
+                        "职位",
+                        "部门",
+                        "开始时间",
+                        "结束时间",
+                        "所在地",
+                        "备注",
+                    ],
+                ),
+                (
+                    "地址信息",
+                    "address",
+                    [
+                        "地址类型",
+                        "国家/地区",
+                        "省/州",
+                        "城市",
+                        "详细地址",
+                        "邮编",
+                        "备注",
+                    ],
+                ),
+                (
+                    "车辆信息",
+                    "vehicle",
+                    [
+                        "品牌",
+                        "型号",
+                        "车牌号",
+                        "VIN",
+                        "购买日期",
+                        "保险到期",
+                        "备注",
+                    ],
+                ),
+                (
+                    "健康信息",
+                    "health",
+                    [
+                        "血型",
+                        "过敏史",
+                        "紧急联系人",
+                        "备注",
+                        "医疗备注",
+                        "保险信息",
+                        "用药说明",
+                    ],
+                ),
+            ]
+        };
+        for (title, kind, fields) in dimensions {
+            let entry_id = doc.add(title, "info", 9)?;
+            let entry = doc.entry_mut(&entry_id)?;
+            entry.set_meta("ID.InfoType", kind);
+            for key in fields {
+                entry.set_field(
+                    key,
+                    "",
+                    matches!(
+                        key,
+                        "VIN"
+                            | "车牌号"
+                            | "License plate"
+                            | "过敏史"
+                            | "Allergies"
+                            | "保险信息"
+                            | "Insurance"
+                            | "用药说明"
+                            | "Medication"
+                    ),
+                );
+                entry.set_meta(&format!("ID.Category:{key}"), kind);
+            }
+            entry.touch();
+        }
+        let contacts = if english {
+            [
+                "Phone number · primary",
+                "Phone number · work",
+                "Phone number · backup",
+            ]
+        } else {
+            ["手机号码 · 主", "手机号码 · 工作", "手机号码 · 备用"]
+        };
+        for title in contacts {
+            let contact_id = doc.add(title, "contact", 5)?;
+            doc.entry_mut(&contact_id)?
+                .set_meta("ID.ContactType", "phone");
+        }
         let xml = serialize(&doc.root)?;
         let (_memory, input) = xml_input(&xml)?;
         let temporary = tempfile::Builder::new()
@@ -245,22 +477,34 @@ pub(crate) fn create(path: &Path, name: &str, password: &crate::vault::Secret) -
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         let entries = actual.entries();
         ensure!(
-            entries.len() == 1
-                && entries[0].0 == format!("{PROJECT_ROOT}/{INFO_GROUP}/{name}")
-                && entries[0].1.value("UUID") == id
-                && entries[0].1.meta("ID.Kind") == "info"
-                && entries[0].1.field_value("身份名") == name
-                && entries[0].1.field_value("Password").is_empty()
+            entries.iter().any(|(path, entry)| {
+                path == &format!("{PROJECT_ROOT}/{INFO_GROUP}/{profile_title}")
+                    && entry.value("UUID") == id
+                    && entry.meta("ID.InfoType") == "profile"
+                    && entry.field_value(profile_fields[0]) == name
+                    && entry.field(profile_fields[7]).is_some_and(protected)
+            }) && entries.iter().any(|(_, e)| e.meta("ID.Kind") == "info")
+                && entries
+                    .iter()
+                    .filter(|(_, e)| e.meta("ID.Kind") == "info")
+                    .count()
+                    == 6
                 && actual.groups().iter().any(|(p, g)| {
                     p == &format!("{PROJECT_ROOT}/{INFO_GROUP}") && g.meta("ID.Group") == "info"
                 })
                 && actual
                     .groups()
                     .iter()
-                    .any(|(p, g)| { p == PROJECT_ROOT && g.meta("ID.Group") == "root" }),
+                    .any(|(p, g)| p == PROJECT_ROOT && g.meta("ID.Group") == "root")
+                && actual.groups().iter().any(|(p, g)| {
+                    p == &format!("{PROJECT_ROOT}/{CONTACT_GROUP}")
+                        && g.meta("ID.Group") == "contact"
+                }),
             "新库初始化校验失败，未发布密码库"
         );
         fs::File::open(&staged)?.sync_all()?;
@@ -381,6 +625,8 @@ pub(crate) struct Document {
     pub fingerprint: [u8; 32],
     pub deletions: Vec<String>,
     pub original_paths: std::collections::BTreeMap<String, String>,
+    pub original_root_uuid: Option<String>,
+    pub original_root_name: Option<String>,
 }
 pub(crate) fn fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut input = fs::File::open(path)?;
@@ -426,6 +672,42 @@ impl Document {
             .context("密码库缺少根分组")
     }
 
+    fn promote_root(&mut self, uuid: &str) -> Result<()> {
+        fn remove(group: &mut Node, uuid: &str) -> Option<Node> {
+            if let Some(index) = group
+                .children
+                .iter()
+                .position(|node| node.name == "Group" && node.value("UUID") == uuid)
+            {
+                return Some(group.children.remove(index));
+            }
+            for child in group.children.iter_mut().filter(|n| n.name == "Group") {
+                if let Some(found) = remove(child, uuid) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let root = self.root.child_mut("Root").context("密码库缺少根容器")?;
+        let container = root
+            .children
+            .iter_mut()
+            .find(|n| n.name == "Group")
+            .context("密码库缺少根分组")?;
+        let mut project = remove(container, uuid).context("ID 根分组不存在")?;
+        for child in std::mem::take(&mut container.children) {
+            if matches!(child.name.as_str(), "Group" | "Entry") {
+                project.children.push(child);
+            }
+        }
+        project.set("Name", PROJECT_ROOT);
+        project.set_meta("ID.Group", "root");
+        project.relocate()?;
+        root.children.clear();
+        root.children.push(project);
+        Ok(())
+    }
+
     fn group_selection(&self, role: &str, names: &[&str]) -> Result<Option<(String, String)>> {
         let marked = self
             .groups()
@@ -455,6 +737,16 @@ impl Document {
 
     fn canonical_root(&mut self) -> Result<(String, bool)> {
         let selected = self.group_selection("root", &[PROJECT_ROOT, "Passwords/ID"])?;
+        let actual_uuid = self.root_container_mut()?.value("UUID").to_owned();
+        if self.root_container_mut()?.value("Name") == PROJECT_ROOT {
+            let root = self.root_container_mut()?;
+            let changed = root.meta("ID.Group") != "root";
+            if changed {
+                root.set_meta("ID.Group", "root");
+                root.touch();
+            }
+            return Ok((actual_uuid, changed));
+        }
         let (uuid, mut changed) = if let Some((path, uuid)) = selected {
             ensure!(
                 self.groups()
@@ -464,15 +756,29 @@ impl Document {
                         || group.meta("ID.Group") == "root"),
                 "ID 目标群组已用于其他资料，原库保留"
             );
-            (uuid, path != PROJECT_ROOT)
+            let is_actual_root = uuid == actual_uuid;
+            if path != PROJECT_ROOT || !is_actual_root {
+                self.promote_root(&uuid)?;
+            }
+            (uuid, path != PROJECT_ROOT || !is_actual_root)
         } else {
-            let mut root = new_group(PROJECT_ROOT, 48);
+            let root = self.root_container_mut()?;
+            if root.value("UUID").is_empty() {
+                root.set("UUID", &STANDARD.encode(rand::random::<[u8; 16]>()));
+            }
+            root.set("Name", PROJECT_ROOT);
+            root.set("IconID", "48");
             root.set_meta("ID.Group", "root");
+            root.touch();
             let uuid = root.value("UUID").to_owned();
-            self.root_container_mut()?.children.push(root);
             (uuid, true)
         };
-        if changed {
+        let at_root = self
+            .groups()
+            .into_iter()
+            .find(|(_, group)| group.value("UUID") == uuid)
+            .is_some_and(|(path, _)| path == PROJECT_ROOT);
+        if changed && !at_root {
             let mut root = self.take("Group", &uuid)?;
             root.set("Name", PROJECT_ROOT);
             root.set_meta("ID.Group", "root");
@@ -568,6 +874,18 @@ impl Document {
             &["ID/账号", "ID/Accounts", "Passwords/ID/账号"],
             48,
         )?;
+        let (_, contact_changed) = self.canonical_child(
+            &root,
+            "contact",
+            CONTACT_GROUP,
+            &[
+                "ID/联系人",
+                "Passwords/ID/联系人",
+                "ID_contacts",
+                "Passwords/ID_contacts",
+            ],
+            5,
+        )?;
         let (_, event_changed) = self.canonical_child(
             &root,
             "event",
@@ -587,9 +905,22 @@ impl Document {
             ],
             19,
         )?;
-        let mut changed =
-            root_changed || info_changed || account_changed || event_changed || email_changed;
-        let target = format!("{PROJECT_ROOT}/{INFO_GROUP}/{identity}");
+        let mut changed = root_changed
+            || info_changed
+            || account_changed
+            || contact_changed
+            || event_changed
+            || email_changed;
+        let info_title = info.as_ref().and_then(|id| {
+            self.entries()
+                .into_iter()
+                .find(|(_, entry)| entry.value("UUID") == id)
+                .map(|(_, entry)| entry.field_value("Title").to_owned())
+        });
+        let target = info_title
+            .filter(|title| !title.is_empty() && title != identity && title != "基础信息")
+            .map(|title| format!("{PROJECT_ROOT}/{INFO_GROUP}/{title}"))
+            .unwrap_or_else(|| format!("{PROJECT_ROOT}/{INFO_GROUP}/身份档案"));
         let at_target = self.find_path(&target)?;
         ensure!(
             at_target.is_none() || at_target == info,
@@ -599,7 +930,7 @@ impl Document {
             Some(id) => id,
             None => {
                 changed = true;
-                self.add(identity, "info", 9)?
+                self.add("身份档案", "info", 9)?
             }
         };
         let current = self
@@ -611,7 +942,7 @@ impl Document {
         if current != target {
             let mut entry = self.take("Entry", &id)?;
             let protected_title = entry.field("Title").is_some_and(protected);
-            entry.set_field("Title", identity, protected_title);
+            entry.set_field("Title", "身份档案", protected_title);
             entry.relocate()?;
             self.group_mut(&info_group)?.children.push(entry);
             changed = true;
@@ -622,9 +953,20 @@ impl Document {
             entry.touch();
             changed = true;
         }
-        if entry.field("身份名").is_none() {
-            entry.set_field("身份名", identity, false);
-            entry.set_meta("ID.Category:身份名", "id-info");
+        if entry.meta("ID.InfoType").is_empty() {
+            entry.set_meta("ID.InfoType", "profile");
+            entry.touch();
+            changed = true;
+        }
+        let identity_field = if entry.meta("ID.IdentityNameField").is_empty() {
+            "身份名".to_owned()
+        } else {
+            entry.meta("ID.IdentityNameField").to_owned()
+        };
+        if entry.field(&identity_field).is_none() {
+            entry.set_field(&identity_field, identity, false);
+            entry.set_meta(&format!("ID.Category:{identity_field}"), "id-info");
+            entry.set_meta("ID.IdentityNameField", &identity_field);
             entry.touch();
             changed = true;
         }
@@ -752,7 +1094,12 @@ impl Document {
             .unwrap_or("");
         let mut out = Vec::new();
         if let Some(root) = self.root.child("Root").and_then(|r| r.child("Group")) {
-            collect(root, String::new(), recycle, &mut out);
+            let base = if root.value("Name") == PROJECT_ROOT {
+                PROJECT_ROOT.to_owned()
+            } else {
+                String::new()
+            };
+            collect(root, base, recycle, &mut out);
         }
         out
     }
@@ -811,6 +1158,7 @@ impl Document {
         let (name, icon) = match role {
             "root" => (PROJECT_ROOT, 48),
             "info" => (INFO_GROUP, 9),
+            "contact" => (CONTACT_GROUP, 5),
             "account" => (ACCOUNT_GROUP, 48),
             "event" => (EVENT_GROUP, 22),
             "email" => (EMAIL_GROUP, 19),
@@ -843,7 +1191,7 @@ impl Document {
         let group = &mut parent.children[index];
         ensure!(group.meta("ID.Group").is_empty(), "分组已用于其他项目类型");
         ensure!(
-            role != "email"
+            !matches!(role, "email" | "contact")
                 || !group
                     .children
                     .iter()
@@ -867,7 +1215,19 @@ impl Document {
             fingerprint: before,
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
+        doc.original_root_uuid = doc
+            .root
+            .child("Root")
+            .and_then(|root| root.child("Group"))
+            .map(|group| group.value("UUID").to_owned());
+        doc.original_root_name = doc
+            .root
+            .child("Root")
+            .and_then(|root| root.child("Group"))
+            .map(|group| group.value("Name").to_owned());
         doc.original_paths = doc
             .entries()
             .into_iter()
@@ -913,7 +1273,12 @@ impl Document {
             .unwrap_or("");
         let mut result = Vec::new();
         if let Some(group) = self.root.child("Root").and_then(|r| r.child("Group")) {
-            collect(group, "", recycle, &mut result);
+            let base = if group.value("Name") == PROJECT_ROOT {
+                PROJECT_ROOT.to_owned()
+            } else {
+                String::new()
+            };
+            collect(group, &base, recycle, &mut result);
         }
         result
     }
@@ -1016,11 +1381,14 @@ impl Document {
         self.entries()
             .into_iter()
             .filter_map(|(path, e)| {
+                let path = path
+                    .strip_prefix(&format!("{PROJECT_ROOT}/"))
+                    .unwrap_or(&path);
                 if path.contains('/') {
                     return None;
                 }
                 let kind = e.meta("ID.Kind");
-                let owned = matches!(kind, "info" | "account" | "event")
+                let owned = matches!(kind, "info" | "account" | "contact" | "event")
                     || e.meta("ID.PublicNotes") == "true"
                     || !e.meta("ID.Import").is_empty()
                     || e.child("CustomData").is_some_and(|d| {
@@ -1031,7 +1399,7 @@ impl Document {
                 owned.then(|| {
                     (
                         e.value("UUID").to_owned(),
-                        if matches!(kind, "info" | "event") {
+                        if matches!(kind, "info" | "contact" | "event") {
                             kind
                         } else {
                             "account"
@@ -1108,12 +1476,21 @@ impl Document {
                     <= 1,
                 "原附件路径有歧义，原库保留"
             );
-            let bytes = session.run(
-                &vault,
-                "attachment-export",
-                &["--stdout".into(), source.clone(), name.clone(), "-".into()],
-                &[],
-            )?;
+            let mut bytes = None;
+            let parts = source.split('/').collect::<Vec<_>>();
+            for start in 0..parts.len() {
+                let candidate = parts[start..].join("/");
+                if let Ok(value) = session.run(
+                    &vault,
+                    "attachment-export",
+                    &["--stdout".into(), candidate, name.clone(), "-".into()],
+                    &[],
+                ) {
+                    bytes = Some(value);
+                    break;
+                }
+            }
+            let bytes = bytes.context("附件条目路径不存在")?;
             attachment_checks.push((path, name, Sha256::digest(&*bytes).into()));
             if !binary_ids.insert(id.clone()) {
                 continue;
@@ -1147,7 +1524,25 @@ impl Document {
             .map(|m| m.value("RecycleBinUUID"))
             .unwrap_or("")
             .to_owned();
-        omit_history(&mut self.root, &recycle, false);
+        let root_replaced = self
+            .original_root_uuid
+            .as_deref()
+            .filter(|uuid| !uuid.is_empty())
+            .is_some_and(|uuid| {
+                self.root
+                    .child("Root")
+                    .and_then(|root| root.child("Group"))
+                    .is_some_and(|group| group.value("UUID") != uuid)
+            })
+            || self.original_root_name.as_deref().is_some_and(|name| {
+                self.root
+                    .child("Root")
+                    .and_then(|root| root.child("Group"))
+                    .is_some_and(|group| group.value("Name") != name)
+            });
+        if !root_replaced {
+            omit_history(&mut self.root, &recycle, false);
+        }
         let xml = serialize(&self.root)?;
         let (_memory, input) = xml_input(&xml)?;
         let temp = tempfile::Builder::new()
@@ -1162,19 +1557,28 @@ impl Document {
             fingerprint(&staged)? == self.fingerprint,
             "密码库已有新版本，请刷新后重试"
         );
-        let verified = session.merge_xml(
-            &vault,
-            &input,
-            &patch,
-            &staged,
-            &self.deletions,
-            &attachment_checks,
-        )?;
+        let verified = if root_replaced {
+            let rebuilt = temp.path().join("rebuilt.kdbx");
+            let verified = session.rebuild_xml(&vault, &input, &rebuilt, &attachment_checks)?;
+            fs::copy(&rebuilt, &staged)?;
+            verified
+        } else {
+            session.merge_xml(
+                &vault,
+                &input,
+                &patch,
+                &staged,
+                &self.deletions,
+                &attachment_checks,
+            )?
+        };
         let actual = Document {
             root: parse(&verified)?,
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         ensure!(
             actual.entries().len() == self.entries().len(),
@@ -1326,6 +1730,8 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         assert_eq!(doc.entries()[0].0, "A & B");
         let entry = doc.entry_mut("entry").unwrap();
@@ -1337,6 +1743,8 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         let entry = again.entries()[0].1;
         assert_eq!(entry.field_value("Public"), "<value>\n中文");
@@ -1361,6 +1769,8 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         assert_eq!(doc.entries().len(), 1);
         assert_eq!(doc.entries()[0].0, "Accounts/GitHub");
@@ -1368,7 +1778,7 @@ mod tests {
     }
     #[test]
     fn native_project_groups_reuse_uuid_after_rename_and_keep_other_groups() {
-        let mut d=Document{root:parse(b"<KeePassFile><Root><Group><UUID>root</UUID><Group><UUID>work</UUID><Name>Work</Name></Group></Group></Root></KeePassFile>").unwrap(),fingerprint:[0;32],deletions:Vec::new(),original_paths:Default::default()};
+        let mut d=Document{root:parse(b"<KeePassFile><Root><Group><UUID>root</UUID><Group><UUID>work</UUID><Name>Work</Name></Group></Group></Root></KeePassFile>").unwrap(),fingerprint:[0;32],deletions:Vec::new(),original_paths:Default::default(),original_root_uuid:None,original_root_name:None};
         d.add("基础信息", "info", 9).unwrap();
         d.add("GitHub", "account", 1).unwrap();
         d.add("注册", "event", 22).unwrap();
@@ -1430,9 +1840,18 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         let count = doc.organize("alice").unwrap();
         assert!(count > 0);
+        assert_eq!(
+            doc.root
+                .child("Root")
+                .and_then(|root| root.child("Group"))
+                .map(|group| group.value("Name")),
+            Some("ID")
+        );
         let project = doc
             .groups()
             .into_iter()
@@ -1441,14 +1860,18 @@ mod tests {
         assert!(
             doc.groups()
                 .iter()
-                .any(|(path, group)| path == "Passwords" && group.value("UUID") == "passwords")
+                .any(|(path, group)| path == "ID/Passwords" && group.value("UUID") == "passwords")
         );
         assert!(
             doc.groups()
                 .iter()
-                .any(|(path, group)| path == "Personal" && group.value("UUID") == "keep")
+                .any(|(path, group)| path == "ID/Personal" && group.value("UUID") == "keep")
         );
-        assert!(doc.find_path("ID/ID_info/alice").unwrap().is_some());
+        assert!(doc.find_path("ID/ID_info/身份档案").unwrap().is_some());
         assert!(doc.groups().iter().any(|(path, _)| path == "ID/ID_account"));
+        fn has_removed(node: &Node) -> bool {
+            node.name == "Removed" || node.children.iter().any(has_removed)
+        }
+        assert!(!has_removed(&doc.root));
     }
 }

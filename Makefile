@@ -78,7 +78,7 @@ $(BIN): Cargo.toml Cargo.lock $(wildcard src/*.rs)
 
 ##@ 日常使用
 
-manage: $(BIN) ## 管理账号、密码、资料与附件；type=all/account/email/password/info，cat=维度
+manage: $(BIN) ## 管理账号、联系方式、密码、资料与附件；type=all/account/contact/email/password/info，cat=维度
 	@$(BIN) manage
 
 ai: $(BIN) ## 全屏 AI 助手；file=非机密资料文件
@@ -90,7 +90,7 @@ pass: $(BIN) ## 复制密码或 field=字段名；title=条目，show=1 明文�
 pass-set: $(BIN) ## 录入密码或 field=受保护字段；title=已有条目，generate=1 生成密码
 	@$(BIN) pass-set
 
-settings: $(BIN) ## 方向键修改设置、API key 和全局明文权限
+settings: $(BIN) ## 方向键修改语言、AI、API key 和全局明文权限
 	@$(BIN) settings
 
 ##@ 身份管理
@@ -115,7 +115,7 @@ doctor: $(BIN) ## 检查 identities 异常；id=身份，fix=1 确认后归档�
 backup: $(BIN) ## 备份各身份加密密码库到 backups/vaults/
 	@$(BIN) backup
 
-organize: $(BIN) ## 将项目群组整理到 ID/ID_info、ID_account、ID_emails、ID_events（id=gene）
+organize: $(BIN) ## 将项目群组整理到第一层 ID 及其资料、联系方式、账号、邮箱、事件群组（id=gene）
 	@$(BIN) organize
 
 clipboard-check: $(BIN) ## 重新自测当前 SSH 终端的剪贴板

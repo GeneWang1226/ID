@@ -12,13 +12,27 @@ pub fn new_identity(project: &Project, name: &str) -> Result<()> {
         "新身份名须以小写字母或数字开头"
     );
     let vault = identity::path(project, name)?;
+    let language = crate::config::Config::load(project)?.ui.language;
+    let english = language == "en";
     let password = if !vault.exists() {
         crate::doctor::ensure_no_conflicts(&vault)?;
-        let first = ui::secret("设置主密码: ")?;
-        let second = ui::secret("再次输入主密码: ")?;
+        let first = ui::secret(if english {
+            "Set master password: "
+        } else {
+            "设置主密码: "
+        })?;
+        let second = ui::secret(if english {
+            "Confirm master password: "
+        } else {
+            "再次输入主密码: "
+        })?;
         ensure!(
             !first.is_empty() && first.bytes() == second.bytes(),
-            "两次输入不一致，或主密码为空；未创建身份"
+            if english {
+                "Passwords do not match or are empty; identity was not created"
+            } else {
+                "两次输入不一致，或主密码为空；未创建身份"
+            }
         );
         Some(first)
     } else {
@@ -26,13 +40,23 @@ pub fn new_identity(project: &Project, name: &str) -> Result<()> {
     };
     if let Some(password) = password {
         private_dir(vault.parent().unwrap())?;
-        kdbx::create(&vault, name, &password)?;
-        println!(
-            "已创建身份 {name}，基础信息已保存到 ID/ID_info/{name}。用 make manage id={name} 继续填写。"
-        );
+        kdbx::create(&vault, name, &password, &language)?;
+        if language == "en" {
+            println!(
+                "Created identity {name}; profile saved at ID/ID_info/Identity profile. Continue with make manage id={name}."
+            );
+        } else {
+            println!(
+                "已创建身份 {name}，身份档案已保存到 ID/ID_info/身份档案。用 make manage id={name} 继续填写。"
+            );
+        }
     } else {
         identity::vault(project, name)?;
-        println!("身份 {name} 已存在，密码库与原主密码保留。");
+        if english {
+            println!("Identity {name} already exists; its vault and master password were kept.");
+        } else {
+            println!("身份 {name} 已存在，密码库与原主密码保留。");
+        }
     }
     log(project, &format!("identity create-or-keep {name}"))?;
     Ok(())

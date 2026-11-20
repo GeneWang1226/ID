@@ -7,6 +7,12 @@
 
 身份数据在 `identities/` 的 KDBX 中，靠 Syncthing，不写入此日志。
 
+## [Unreleased]
+
+- 新身份使用第一层 `ID` 根群组，预建资料、联系方式、账号、邮箱和事件群组；个人资料按身份档案、教育、工作、地址、车辆和健康维度分条目保存。
+- `make organize` 可将旧项目根群组提升到第一层 `ID`，联系方式归入 `ID_contacts`，并保留原有条目数据。
+- 设置新增中文 / English 语言选择，AI 按设置返回对应语言；管理界面增加联系方式筛选和录入入口。
+
 ## [0.2.1] — 2026-11-19
 
 - Track `identities/README.md` as a safe guide while continuing to exclude all KDBX files; document using the project root `ID/` as the Syncthing folder.
@@ -14,7 +20,7 @@
 - Clarified the project identity as a multi-identity manager in the README and repository description.
 - Added an MIT license, a concise English README, an English documentation set, and a categorized Chinese documentation set under `docs/`.
 - 统一 KDBX 项目结构为第一层 `ID` 及其 `ID_info`、`ID_account`、`ID_emails`、`ID_events` 子群组；`make organize` 可迁移旧路径和 `Passwords/ID`，保留 UUID、密码、受保护字段、附件与历史，冲突时中止且不删除空群组。
-- 新建身份直接创建 `ID/ID_info/<身份名>`；查询、邮箱归类、事件保存和 TUI 路径统一使用新标记。KeePassXC-Browser 的新凭据保存组由用户手动设为 `ID/ID_account`，项目不修改插件配置。
+- 新建身份直接创建第一层 `ID` 及 `ID/ID_info/身份档案`；查询、邮箱归类、事件保存和 TUI 路径统一使用新标记。KeePassXC-Browser 的新凭据保存组由用户手动设为 `ID/ID_account`，项目不修改插件配置。
 - AI 只读查询支持账号、邮箱、基础信息和关键词筛选；账号结果带完整条目路径、分组、公开字段、受保护字段名称和附件数量，便于关联云主账号与子账号，但不发送密码、密钥或附件内容。
 - 云主账号与子账号在 AI 流程中使用独立条目；密钥操作绑定完整子账号标题，文件导入由本地附件选择器完成。管理界面增加独立邮箱筛选，`type=email` 只显示 `ID/ID_emails`。
 - 可在设置开启 Syncthing 同步交接：打开身份前确认同步，修改后退出等待指定设备收到完整同版本 KDBX；离线、超时、错误及冲突不会报告交接成功，API key 保存在本机机密配置。
@@ -28,8 +34,8 @@
 - 管理界面、AI 助手和设置在解锁、再次验证及录入密码时保持全屏，使用居中密码框与固定圆点；支持清空、取消和缩放，不再跳回普通终端提示。
 - TUI 附件导入支持目录浏览、翻页、隐藏文件和路径补全；可粘贴带空格或引号的路径，SSH 下明确区分服务器文件。选好文件后才再次验证，保留原文件，取消选择不写库。
 - 身份文件简化为 `identities/<身份>.kdbx`，新建身份不再复制旧模板目录；兼容旧路径，新旧库同时存在时拒绝选择，Syncthing 冲突副本不列为身份，锁文件归入本机配置缓存。
-- `make organize` 可将旧根目录或旧项目群组中的基础信息统一为原生 `ID/ID_info/<身份名>`，保留群组与条目 UUID、字段保护、密码、附件及历史；保存前本地确认并备份，冲突时保留原库。
-- 新建身份时直接设置并确认独立主密码，自动创建原生 `ID/ID_info/<身份名>` 基础信息条目；取消或密码不一致不创建身份，初始化验证后才发布加密库，不再使用配置中的共享初始密码。
+- `make organize` 可将旧根目录或旧项目群组中的基础信息统一为原生 `ID/ID_info/身份档案`，保留群组与条目 UUID、字段保护、密码、附件及历史；保存前本地确认并备份，冲突时保留原库。
+- 新建身份时直接设置并确认独立主密码，自动创建原生 `ID/ID_info/身份档案` 基础信息条目；取消或密码不一致不创建身份，初始化验证后才发布加密库，不再使用配置中的共享初始密码。
 - 新建内容使用 KDBX 原生 `ID/ID_info`、`ID/ID_account`、`ID/ID_events` 群组，邮箱使用 `ID/ID_emails`；TUI 按实际路径分组，原生 UUID 与 CustomData 保持群组改名后的识别。新增 `make organize`，确认后整理带项目标记的旧根条目，保留 UUID、密码、附件和历史，其他原有条目及群组不移动。
 - 项目转为 Rust 命令行与全屏 TUI；保留 Make 入口，移除 SQLite 运行依赖、数据库命令和旧 Web 服务。
 - 所有身份资料归入各自 KDBX：账号与密码使用同一原生条目，个人资料集中为“基础信息”的原生自定义字段，事件使用事件条目。

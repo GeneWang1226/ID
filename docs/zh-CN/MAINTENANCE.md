@@ -24,6 +24,8 @@ make check
 
 项目设置在 `config/config.toml`，每次操作读取最新配置；API key 在 `config/secrets/.secrets.env`，权限应为 600。用 `make settings` 修改。新建身份不再读取 `KDBX_INITIAL_PASSWORD`，主密码由用户当场输入。Docker 的旧本机 `.env` 不会被程序读取，原 SQLite Web 服务已退役。
 
+`make settings` 的语言项支持中文和 English。它会影响 AI 回复以及之后新建身份的预设标题和字段；已有 KDBX 条目名称不会被批量翻译。
+
 ## 新建、改密与授权
 
 ```sh
@@ -36,7 +38,7 @@ make grants
 make revoke all=1
 ```
 
-新建时设置并确认独立主密码，同时创建第一层 `ID/ID_info/<身份名>` 原生基础信息条目，填入“身份名”；主密码仅用于加密，不会作为条目字段或配置保存。完整初始化并验证后才发布 `identities/<身份名>.kdbx`，不覆盖已有库，也不再复制旧模板的子目录、档案或指引。旧版本创建的库仍使用当时的密码，需用 `make passwd` 提供旧密码后更换。条目 Tags：`ai-deny` 禁止 AI 授权，`ai-auto` 限时多次，无标签默认一次性。临时凭据放本机运行时目录，不入 Git 或 Syncthing。
+新建时设置并确认独立主密码，同时创建第一层 `ID/ID_info/身份档案` 原生基础信息条目，填入“身份名”；主密码仅用于加密，不会作为条目字段或配置保存。完整初始化并验证后才发布 `identities/<身份名>.kdbx`，不覆盖已有库，也不再复制旧模板的子目录、档案或指引。旧版本创建的库仍使用当时的密码，需用 `make passwd` 提供旧密码后更换。条目 Tags：`ai-deny` 禁止 AI 授权，`ai-auto` 限时多次，无标签默认一次性。临时凭据放本机运行时目录，不入 Git 或 Syncthing。
 
 受保护自定义字段通过管理界面的 `c` 或 `make pass field=字段名` 在本地取用，每次重新验证主密码。复制沿用本机 KeePassXC 或 SSH OSC 52 与十秒清理；查看沿用 `terminal.allow_plaintext`，打开的 TUI 字段窗口也会响应撤销权限并清屏。内容不送给模型、不写日志；清屏无法撤销终端录制或已粘贴的内容。
 
@@ -50,7 +52,7 @@ make revoke all=1
 
 `id import 表格.xlsx --owner 原使用者=example` 仍支持旧七列账号表。账号、地区与服务商入原生字段，备注、密码提示和详细数据作为受保护字段；各身份分别解锁和提交。多身份导入是逐库完成，重复导入会跳过已完成行。原表不会再另存明文备份，也不会删除用户提供的文件。
 
-`make organize id=example` 将旧的 `Passwords/ID`、`ID_info`、`ID_emails`、`ID/账号` 和 `ID/事件` 统一为第一层 `ID` 下的 `ID_info`、`ID_account`、`ID_emails`、`ID_events`，基础信息目标为 `ID/ID_info/example`，同时整理带项目标记的旧根条目。基础信息可来自根目录或旧项目群组：复用群组和条目的 UUID，保留字段、保护标记、密码、附件和历史；缺少基础信息时仅创建身份名。`Passwords` 和其他用户群组不自动删除或搬动。解锁后预检并要求确认，保存前留加密备份；同名目标、重复基础信息、重复用途标记或群组路径冲突时中止，保留原库。
+`make organize id=example` 将旧的 `Passwords/ID`、`ID_info`、`ID_emails`、`ID/账号` 和 `ID/事件` 统一为第一层 `ID` 下的 `ID_info`、`ID_contacts`、`ID_account`、`ID_emails`、`ID_events`，基础信息目标为 `ID/ID_info/身份档案`，同时整理带项目标记的旧根条目。基础信息可来自根目录或旧项目群组：复用群组和条目的 UUID，保留字段、保护标记、密码、附件和历史；缺少基础信息时仅创建身份名。`Passwords` 和其他用户群组不自动删除或搬动。解锁后预检并要求确认，保存前留加密备份；同名目标、重复基础信息、重复用途标记或群组路径冲突时中止，保留原库。
 
 邮箱条目使用 `ID.AccountType=email`，仍是 `ID.Kind=account`；`ID/ID_emails` 群组使用 `ID.Group=email` 和邮箱图标。`make organize` 也整理明确的邮箱导入记录、邮箱群组及带已知邮箱服务商的项目账号；其他网站与未识别条目不自动迁移，可手动确认“归为邮箱”。邮箱字段归一化仅补充已知别名，保留原值、原字段及保护状态；恢复类属性始终受保护。未知备注和源记录不自动解释或删除。
 

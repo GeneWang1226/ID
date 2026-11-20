@@ -195,7 +195,14 @@ fn entry_kind<'a>(entry: &'a Node, path: &str, groups: &BTreeMap<String, String>
         "info" => "info",
         "event" => "event",
         "account" => "account",
+        "contact" => "contact",
         _ => match path.rsplit_once('/').map(|(parent, _)| parent) {
+            Some(parent)
+                if groups.get(parent).is_some_and(|k| k == "contact")
+                    || matches!(parent, "ID/联系人" | "ID/ID_contacts" | "ID_contacts") =>
+            {
+                "contact"
+            }
             Some(parent)
                 if groups.get(parent).is_some_and(|k| k == "info")
                     || matches!(
@@ -221,17 +228,45 @@ fn entry_kind<'a>(entry: &'a Node, path: &str, groups: &BTreeMap<String, String>
 }
 pub(crate) fn information_id(doc: &Document) -> Result<Option<String>> {
     let groups = group_roles(doc);
-    let found = doc
+    let info = doc
         .entries()
         .into_iter()
         .filter(|(path, e)| entry_kind(e, path, &groups) == "info")
+        .collect::<Vec<_>>();
+    let profiles = info
+        .iter()
+        .filter(|(_, e)| e.meta("ID.InfoType") == "profile")
         .map(|(_, e)| e.value("UUID").to_owned())
         .collect::<Vec<_>>();
     ensure!(
-        found.len() <= 1,
+        profiles.len() <= 1,
         "存在多个基础信息条目，请在 KeePassXC 中整理后重试"
     );
-    Ok(found.into_iter().next())
+    if let Some(id) = profiles.into_iter().next() {
+        return Ok(Some(id));
+    }
+    let legacy = info
+        .into_iter()
+        .filter(|(_, e)| e.meta("ID.InfoType").is_empty())
+        .map(|(_, e)| e.value("UUID").to_owned())
+        .collect::<Vec<_>>();
+    ensure!(
+        legacy.len() <= 1,
+        "存在多个基础信息条目，请在 KeePassXC 中整理后重试"
+    );
+    Ok(legacy.into_iter().next())
+}
+
+fn info_type(category: &str) -> Option<&'static str> {
+    Some(match category {
+        "id-info" => "profile",
+        "education" => "education",
+        "work" => "work",
+        "address" => "address",
+        "asset" | "vehicle" => "vehicle",
+        "health" => "health",
+        _ => return None,
+    })
 }
 pub(crate) fn snapshot(doc: &Document) -> Vec<Item> {
     let groups = group_roles(doc);
@@ -331,7 +366,34 @@ pub(crate) fn put_document(
         matches!(category, "account" | "email") || !sensitive(key),
         "机密字段请在本地管理界面中录入"
     );
-    if matches!(category, "account" | "email") {
+    if category == "contact" {
+        let groups = group_roles(doc);
+        let id = doc
+            .entries()
+            .into_iter()
+            .find(|(path, entry)| {
+                entry_kind(entry, path, &groups) == "contact"
+                    && entry.field_value("Title").eq_ignore_ascii_case(key)
+            })
+            .map(|(_, entry)| entry.value("UUID").to_owned());
+        let id = match id {
+            Some(id) => id,
+            None => doc.add(key, "contact", 5)?,
+        };
+        let entry = doc.entry_mut(&id)?;
+        ensure!(
+            entry.field("UserName").is_none_or(|n| !kdbx::protected(n)),
+            "受保护联系方式请在本地编辑"
+        );
+        ensure!(
+            entry.field("Notes").is_none_or(|n| !kdbx::protected(n)),
+            "受保护备注请在 KeePassXC 中编辑"
+        );
+        entry.set_field("UserName", value, false);
+        entry.set_field("Notes", note, false);
+        entry.set_meta("ID.PublicNotes", "true");
+        entry.touch();
+    } else if matches!(category, "account" | "email") {
         ensure!(!email || email_address(value), "邮箱地址无效");
         let id = match doc.find_entry(key)? {
             Some(id) => id,
@@ -368,9 +430,34 @@ pub(crate) fn put_document(
             doc.email(&id)?;
         }
     } else {
-        let id = match information_id(doc)? {
-            Some(id) => id,
-            None => doc.add("基础信息", "info", 9)?,
+        let id = if let Some(kind) = info_type(category) {
+            let existing = doc
+                .entries()
+                .into_iter()
+                .find(|(_, entry)| entry.meta("ID.InfoType") == kind)
+                .map(|(_, entry)| entry.value("UUID").to_owned());
+            match existing {
+                Some(id) => id,
+                None => {
+                    let title = match kind {
+                        "profile" => "身份档案",
+                        "education" => "教育经历",
+                        "work" => "工作经历",
+                        "address" => "地址信息",
+                        "vehicle" => "车辆信息",
+                        "health" => "健康信息",
+                        _ => "资料",
+                    };
+                    let id = doc.add(title, "info", 9)?;
+                    doc.entry_mut(&id)?.set_meta("ID.InfoType", kind);
+                    id
+                }
+            }
+        } else {
+            match information_id(doc)? {
+                Some(id) => id,
+                None => doc.add("身份档案", "info", 9)?,
+            }
         };
         let entry = doc.entry_mut(&id)?;
         ensure!(
@@ -455,16 +542,12 @@ impl<'a> Store<'a> {
             return Ok(());
         }
         if !ui::confirm(&format!(
-            "将整理 {count} 项项目资料到 ID/；基础信息统一到 ID/ID_info/{}，邮箱归入 ID/ID_emails。先留加密备份，保留 UUID、密码、附件和历史。",
-            self.identity
+            "将整理 {count} 项项目资料到 ID/；基础信息统一到 ID/ID_info/身份档案，邮箱归入 ID/ID_emails。先留加密备份，保留 UUID、密码、附件和历史。"
         ))? {
             return Ok(());
         }
         doc.save(self.project, self.identity, self.session)?;
-        println!(
-            "已整理 {count} 项项目资料，基础信息位于 ID/ID_info/{}。",
-            self.identity
-        );
+        println!("已整理 {count} 项项目资料，基础信息位于 ID/ID_info/身份档案。");
         Ok(())
     }
     pub fn batch(
@@ -781,6 +864,7 @@ pub fn category_label(category: &str) -> &str {
         "health" => "健康",
         "finance" => "财务",
         "asset" => "资产",
+        "vehicle" => "车辆",
         _ => category,
     }
 }
@@ -918,6 +1002,7 @@ impl Record {
             self.item.group_path(),
             match self.kind() {
                 "info" => "基础信息",
+                "contact" => "联系方式",
                 "event" => "事件",
                 _ if self.item.email => "邮箱与密码",
                 _ => "账号与密码",
@@ -983,6 +1068,7 @@ pub fn records(
         .iter()
         .filter(|i| match view {
             "account" => i.category == "account" && !i.email,
+            "contact" => i.category == "contact",
             "email" => i.category == "account" && i.email,
             "password" => i.category == "account" && i.password_set,
             "info" => i.category == "info",
@@ -1038,6 +1124,8 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         put_document(&mut doc, "account", "GitHub", "tester@example.com", "").unwrap();
         put_document(&mut doc, "email", "Proton", "tester@example.com", "Mailbox").unwrap();
@@ -1086,6 +1174,8 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         let i = &snapshot(&d)[0];
         assert!(i.password_set);
@@ -1100,6 +1190,8 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         put_document(&mut d, "id-info", "姓名", "Synthetic", "备注").unwrap();
         put_document(&mut d, "account", "电话号码", "1234", "").unwrap();
@@ -1107,13 +1199,21 @@ mod tests {
         let error = put_document(&mut d, "account", "GitHub", "new-user", "").unwrap_err();
         assert!(error.to_string().contains("未覆盖"));
         let items = snapshot(&d);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[1].fields.len(), 2);
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items
+                .iter()
+                .find(|i| i.category == "info")
+                .unwrap()
+                .fields
+                .len(),
+            1
+        );
         assert_eq!(items[0].value, "user");
         assert!(put_document(&mut d, "info", "api key", "secret", "").is_err());
         assert_eq!(infer_title("查一下我的github密码"), "github密码");
         put_document(&mut d, "account", "1Password", "public-login", "").unwrap();
-        let info = d.find_entry("基础信息").unwrap().unwrap();
+        let info = d.find_entry("身份档案").unwrap().unwrap();
         d.entry_mut(&info)
             .unwrap()
             .set_field("隐藏属性", "original", true);
@@ -1125,11 +1225,11 @@ mod tests {
     }
     #[test]
     fn information_namespace_does_not_claim_another_groups_entry() {
-        let mut doc=Document{root:kdbx::parse("<KeePassFile><Root><Group><UUID>root</UUID><Group><UUID>work</UUID><Name>Work</Name><Entry><UUID>external</UUID><String><Key>Title</Key><Value>基础信息</Value></String><String><Key>UserName</Key><Value>original</Value></String></Entry></Group></Group></Root></KeePassFile>".as_bytes()).unwrap(),fingerprint:[0;32],deletions:Vec::new(),original_paths:Default::default()};
+        let mut doc=Document{root:kdbx::parse("<KeePassFile><Root><Group><UUID>root</UUID><Group><UUID>work</UUID><Name>Work</Name><Entry><UUID>external</UUID><String><Key>Title</Key><Value>基础信息</Value></String><String><Key>UserName</Key><Value>original</Value></String></Entry></Group></Group></Root></KeePassFile>".as_bytes()).unwrap(),fingerprint:[0;32],deletions:Vec::new(),original_paths:Default::default(),original_root_uuid:None,original_root_name:None};
         put_document(&mut doc, "id-info", "姓名", "Synthetic", "").unwrap();
         let information = information_id(&doc).unwrap().unwrap();
         assert_ne!(information, "external");
-        assert!(doc.find_path("ID/ID_info/基础信息").unwrap().is_some());
+        assert!(doc.find_path("ID/ID_info/身份档案").unwrap().is_some());
         let outside = doc.entry_mut("external").unwrap();
         assert_eq!(outside.field_value("UserName"), "original");
         assert!(outside.field("姓名").is_none());

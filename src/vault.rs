@@ -207,17 +207,69 @@ impl Session {
         }
         use sha2::Digest;
         for (path, name, expected) in attachments {
-            let bytes = run_with(
-                staged,
-                "attachment-export",
-                &["--stdout".into(), path.clone(), name.clone(), "-".into()],
-                password,
-                &[],
-            )?;
+            let mut bytes = None;
+            let parts = path.split('/').collect::<Vec<_>>();
+            for start in 0..parts.len() {
+                let candidate = parts[start..].join("/");
+                if let Ok(value) = run_with(
+                    staged,
+                    "attachment-export",
+                    &["--stdout".into(), candidate, name.clone(), "-".into()],
+                    password,
+                    &[],
+                ) {
+                    bytes = Some(value);
+                    break;
+                }
+            }
+            let bytes = bytes.context("附件保存校验失败，原密码库保留")?;
             let hash: [u8; 32] = sha2::Sha256::digest(&*bytes).into();
             ensure!(&hash == expected, "附件保存校验失败，原密码库保留");
         }
         let result = run_with(staged, "export", &[], password, &[]);
+        state.last_used = Instant::now();
+        self.shared.1.notify_all();
+        result
+    }
+
+    pub fn rebuild_xml(
+        &self,
+        database: &Path,
+        xml: &Path,
+        rebuilt: &Path,
+        attachments: &[(String, String, [u8; 32])],
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        self.unlock(database, false)?;
+        let mut state = self.shared.0.lock().unwrap_or_else(|e| e.into_inner());
+        let password = state.password.as_ref().context("会话已锁定，请重试")?;
+        run_with(
+            xml,
+            "import",
+            &[rebuilt.to_string_lossy().into_owned(), "-p".into()],
+            password,
+            &[password],
+        )?;
+        for (path, name, expected) in attachments {
+            let mut bytes = None;
+            let parts = path.split('/').collect::<Vec<_>>();
+            for start in 0..parts.len() {
+                let candidate = parts[start..].join("/");
+                if let Ok(value) = run_with(
+                    rebuilt,
+                    "attachment-export",
+                    &["--stdout".into(), candidate, name.clone(), "-".into()],
+                    password,
+                    &[],
+                ) {
+                    bytes = Some(value);
+                    break;
+                }
+            }
+            let bytes = bytes.context("附件保存校验失败，原密码库保留")?;
+            let hash: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(&*bytes).into();
+            ensure!(&hash == expected, "附件保存校验失败，原密码库保留");
+        }
+        let result = run_with(rebuilt, "export", &[], password, &[]);
         state.last_used = Instant::now();
         self.shared.1.notify_all();
         result

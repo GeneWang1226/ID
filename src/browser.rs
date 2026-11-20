@@ -186,6 +186,7 @@ impl Browser {
                     [
                         ("all", "全部"),
                         ("account", "账号"),
+                        ("contact", "联系方式"),
                         ("email", "邮箱"),
                         ("password", "密码"),
                         ("info", "个人信息"),
@@ -237,7 +238,7 @@ impl Browser {
                 } else {
                     ui::color(
                         &ui::clip(
-                            "1 全部  2 账号  3 邮箱  4 密码  5 信息  n 新增  d 维度  r 刷新  l 锁定  q 退出",
+                            "1 全部  2 账号  3 联系方式  4 邮箱  5 密码  6 信息  n 新增  d 维度  r 刷新  l 锁定  q 退出",
                             width,
                         ),
                         "2",
@@ -253,12 +254,12 @@ impl Browser {
                 self.page = self.page.min(pages.len() - 1);
                 let current = &records[pages[self.page].clone()];
                 match k.code {
-                    KeyCode::Char(c @ '1'..='5') => {
+                    KeyCode::Char(c @ '1'..='6') => {
                         self.page = 0;
                         self.selected = 0;
                         self.expanded = false;
                         return Ok(Action::Filter(
-                            ["all", "account", "email", "password", "info"]
+                            ["all", "account", "contact", "email", "password", "info"]
                                 [(c as u8 - b'1') as usize]
                                 .into(),
                         ));
@@ -563,6 +564,7 @@ fn new_record(store: &Store) -> Result<()> {
         "新增",
         &[
             "账号".into(),
+            "联系方式".into(),
             "基础信息字段".into(),
             "事件".into(),
             "邮箱".into(),
@@ -579,10 +581,10 @@ fn new_record(store: &Store) -> Result<()> {
     if name.is_empty() {
         return Ok(());
     }
-    if kind == 1 && store::sensitive(&name) {
+    if kind == 2 && store::sensitive(&name) {
         anyhow::bail!("机密请在条目内选择添加字段，使用受保护输入");
     }
-    let value = ui::input(if kind == 3 {
+    let value = ui::input(if kind == 4 {
         "邮箱地址: "
     } else if kind == 0 {
         "登录名 / 邮箱 / 手机号: "
@@ -592,8 +594,9 @@ fn new_record(store: &Store) -> Result<()> {
     let note = ui::input("备注: ")?;
     match kind {
         0 => store.create_account(&name, &value, &note)?,
-        3 => store.create_email(&name, &value, &note)?,
-        1 => {
+        1 => store.put(store.identity, "contact", &name, &value, &note)?,
+        4 => store.create_email(&name, &value, &note)?,
+        2 => {
             let cat = ui::input("维度（例如 id-info / contact / work）: ")?;
             store.put(
                 store.identity,
@@ -780,6 +783,8 @@ mod tests {
             fingerprint: [0; 32],
             deletions: Vec::new(),
             original_paths: Default::default(),
+            original_root_uuid: None,
+            original_root_name: None,
         };
         let items = store::snapshot(&document);
         let one = store::records(&items, &BTreeMap::new(), "all", "")[0].clone();

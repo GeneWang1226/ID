@@ -9,6 +9,10 @@ thinking_budget = 8192
 [terminal]
 allow_plaintext = true
 
+[ui]
+# zh-CN or en; new identity presets and AI replies follow this choice.
+language = "zh-CN"
+
 # 每台设备连接自己的 Syncthing；首次在 make settings 中选择同步目录和 NAS。
 [syncthing]
 enabled = false

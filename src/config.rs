@@ -29,6 +29,18 @@ pub struct Terminal {
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
+pub struct Ui {
+    pub language: String,
+}
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            language: "zh-CN".into(),
+        }
+    }
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Syncthing {
     pub enabled: bool,
     pub api_url: String,
@@ -53,6 +65,7 @@ pub struct Config {
     pub ai: Ai,
     pub terminal: Terminal,
     pub syncthing: Syncthing,
+    pub ui: Ui,
 }
 
 impl Config {
@@ -77,7 +90,7 @@ impl Config {
             toml::Value::Table(Default::default())
         };
         let replacement = toml::Value::try_from(self)?;
-        for name in ["ai", "terminal", "syncthing"] {
+        for name in ["ai", "terminal", "syncthing", "ui"] {
             let table = value.as_table_mut().context("配置根节点须为表")?;
             let section = table
                 .entry(name)
@@ -188,6 +201,14 @@ pub fn settings(project: &Project) -> Result<()> {
         };
         let rows = vec![
             format!(
+                "语言 / Language   {}",
+                if cfg.ui.language == "en" {
+                    "English"
+                } else {
+                    "中文"
+                }
+            ),
+            format!(
                 "AI API key       {}",
                 if key_set { "已设置" } else { "未设置" }
             ),
@@ -209,12 +230,21 @@ pub fn settings(project: &Project) -> Result<()> {
         }
         match choice {
             Some(0) => {
+                let choices = ["中文", "English"];
+                if let Some(i) = ui::choose(
+                    "语言 / Language",
+                    &choices.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
+                )? {
+                    cfg.ui.language = if i == 1 { "en" } else { "zh-CN" }.into();
+                }
+            }
+            Some(1) => {
                 let value = ui::secret("新的 AI API key（Enter 保留）: ")?;
                 if !value.is_empty() {
                     pending = Some(value);
                 }
             }
-            Some(1) => {
+            Some(2) => {
                 let v = ui::input("AI 接口地址（Enter 保留）: ")?;
                 if !v.is_empty() {
                     let url = reqwest::Url::parse(&v).context("接口地址无效")?;
@@ -227,14 +257,14 @@ pub fn settings(project: &Project) -> Result<()> {
                     cfg.ai.base_url = v;
                 }
             }
-            Some(2) => {
+            Some(3) => {
                 let v = ui::input("AI 模型（Enter 保留）: ")?;
                 if !v.is_empty() {
                     cfg.ai.model = v;
                 }
             }
-            Some(3) => cfg.ai.thinking = !cfg.ai.thinking,
-            Some(4) => {
+            Some(4) => cfg.ai.thinking = !cfg.ai.thinking,
+            Some(5) => {
                 let v = ui::input("思考预算（Enter 保留）: ")?;
                 if !v.is_empty() {
                     let budget = v.parse::<u32>().context("思考预算须为正整数")?;
@@ -242,8 +272,8 @@ pub fn settings(project: &Project) -> Result<()> {
                     cfg.ai.thinking_budget = budget;
                 }
             }
-            Some(5) => cfg.terminal.allow_plaintext = !cfg.terminal.allow_plaintext,
-            Some(6) => {
+            Some(6) => cfg.terminal.allow_plaintext = !cfg.terminal.allow_plaintext,
+            Some(7) => {
                 if let Some(v) = pending {
                     update_secret(project, "AI_API_KEY", &v)?;
                 }
@@ -255,7 +285,7 @@ pub fn settings(project: &Project) -> Result<()> {
                 println!("设置已保存。");
                 return Ok(());
             }
-            Some(7) => {
+            Some(8) => {
                 if let Err(error) =
                     crate::syncthing::settings(project, &mut cfg.syncthing, &mut sync_key)
                 {
@@ -295,9 +325,12 @@ mod tests {
         fs::write(dir.path().join("config/config.toml"), "[extra]\nkeep=42\n").unwrap();
         let mut c = Config::load(&p).unwrap();
         assert!(!c.terminal.allow_plaintext);
+        assert_eq!(c.ui.language, "zh-CN");
+        c.ui.language = "en".into();
         c.terminal.allow_plaintext = true;
         c.save(&p).unwrap();
         assert!(Config::plaintext_allowed(&p));
+        assert_eq!(Config::load(&p).unwrap().ui.language, "en");
         assert!(
             fs::read_to_string(dir.path().join("config/config.toml"))
                 .unwrap()

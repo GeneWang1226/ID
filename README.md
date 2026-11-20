@@ -22,10 +22,10 @@ Requirements: Linux, Rust 1.89+, GNU Make, and `keepassxc-cli`.
 make build
 make settings
 make new id=example
-make manage id=example
+make ai id=example
 ```
 
-`make new` asks for an independent master password and creates `ID/ID_info/example` in `identities/example.kdbx`.
+Use `make settings` to choose 中文 or English before creating identities. `make new` asks for an independent master password and creates a first-level `ID` group with localized profile, contact, account, email, and event groups in `identities/example.kdbx`. The profile is prefilled with reusable dimensions such as name, birthday, education, work, address, vehicle, and health. `make ai` follows the same language choice.
 
 Common commands:
 
@@ -45,7 +45,8 @@ The project uses ordinary KeePass groups. `Passwords` is not required.
 
 ```text
 ID/
-├── ID_info       profile fields and identity information
+├── ID_info       profile, education, work, address, vehicle, and health entries
+├── ID_contacts   phone numbers and other contact points
 ├── ID_account    website, cloud, and application accounts
 ├── ID_emails     email accounts and their protected recovery fields
 └── ID_events     important changes and reminders

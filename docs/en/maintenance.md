@@ -20,6 +20,8 @@ make organize id=example
 
 `make organize` previews and confirms migration from older project groups such as `Passwords/ID`, old `ID_info`, `ID_emails`, and `ID/账号`. It preserves UUIDs, protected fields, passwords, attachments, and history, creates an encrypted backup before writing, and aborts on conflicts. It does not delete empty groups or `Passwords`.
 
+New vaults use a first-level `ID` group with localized profile entries in `ID_info`, separate phone/contact entries in `ID_contacts`, and account, email, and event groups. The language selected in `make settings` is applied to new preset titles and fields; existing entries keep their own names.
+
 ## Syncthing
 
 Use `make settings` to configure optional local Syncthing handoff checks. The API key is stored in local secret configuration. Before opening or changing a vault, ID can wait for the selected device to hold the complete matching KDBX version. A timeout, conflict, or offline peer stops the operation instead of claiming success.
